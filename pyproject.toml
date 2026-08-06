@@ -1,2 +1,14 @@
+[project]
+name = "ia-bridge"
+version = "0.1.0"
+description = "Auditoria IA bridge"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "anthropic",
+    "pydantic",
+    "requests"
+]
+
 [tool.vercel]
 entrypoint = "api.auditar:app"
