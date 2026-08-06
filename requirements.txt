@@ -2,4 +2,5 @@ fastapi==0.141.1
 anthropic==0.120.2
 httpx==0.28.1
 pydantic==2.13.3
+python-multipart==0.0.26
 vercel_storage==0.0.1
