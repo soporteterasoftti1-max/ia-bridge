@@ -1,0 +1,10 @@
+{
+  "name": "auditoria-ia-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Función Node.js que genera tokens de subida directa a Vercel Blob para la Auditoría IA.",
+  "type": "module",
+  "dependencies": {
+    "@vercel/blob": "^2.7.0"
+  }
+}

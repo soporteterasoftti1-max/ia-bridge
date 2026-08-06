@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tecnosoft Ti - Cuadre de Caja</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f9; }
+
+        .top-bar { display: flex; justify-content: space-between; align-items: center; max-width: 900px; margin-bottom: 20px; flex-wrap: wrap; gap: 15px; }
+        .filtros { display: flex; gap: 15px; background: white; padding: 10px 15px; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
+
+        .control-group { display: flex; align-items: center; }
+        .control-group label { font-weight: bold; margin-right: 8px; font-size: 14px; }
+        .control-group input { padding: 5px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+
+        #tasa { width: 80px; text-align: right; transition: background-color 0.3s; }
+        #filtro-serie { width: 60px; text-transform: uppercase; }
+
+        .btn-sync { background-color: #007bff; color: white; border: none; padding: 10px 20px; font-size: 14px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: 0.3s; }
+        .btn-sync:hover { background-color: #0056b3; }
+        .btn-sync:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .upload-section { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); max-width: 900px; margin-bottom: 20px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;}
+        .upload-section h3 { margin: 0; font-size: 16px; color: #333; }
+        .btn-upload { background-color: #28a745; color: white; border: none; padding: 8px 15px; font-size: 14px; font-weight: bold; border-radius: 4px; cursor: pointer; transition: 0.3s;}
+        .btn-upload:hover { background-color: #218838; }
+
+        table { border-collapse: collapse; width: 100%; max-width: 900px; background-color: white; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        th, td { border: 1px solid #000; padding: 8px; text-align: right; }
+        th { background-color: #f0f0f0; text-align: center; font-weight: bold; }
+        td:first-child { text-align: left; font-weight: bold; }
+
+        .bg-blue { background-color: #e8f8f5; }
+        .bg-gray { background-color: #f5f5f5; }
+
+        table input[type="text"] { width: 90%; border: none; background: transparent; text-align: right; font-size: 14px; outline: none; }
+
+        .positive { color: blue; }
+        .negative { color: red; }
+        .neutral { color: black; }
+
+        .acciones-cuadre { display: flex; justify-content: space-between; align-items: center; max-width: 900px; margin-bottom: 15px; background: white; padding: 12px 15px; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); flex-wrap: wrap; gap: 10px; }
+        .btn-guardar-cuadre { background-color: #6f42c1; color: white; border: none; padding: 8px 15px; font-size: 14px; font-weight: bold; border-radius: 4px; cursor: pointer; }
+        .btn-guardar-cuadre:hover { background-color: #59339c; }
+        .btn-ver-guardados { background-color: #17a2b8; color: white; border: none; padding: 8px 15px; font-size: 14px; font-weight: bold; border-radius: 4px; cursor: pointer; }
+        .btn-ver-guardados:hover { background-color: #12828f; }
+        #notas-cuadre { padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; width: 220px; }
+
+        #banner-modo-guardado { display: none; max-width: 900px; margin-bottom: 15px; padding: 10px 15px; background-color: #cfe2ff; border: 1px solid #9ec5fe; border-radius: 6px; font-size: 14px; }
+
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+        .modal-overlay.abierto { display: flex; }
+        .modal-box { background: white; border-radius: 8px; padding: 20px; width: 90%; max-width: 850px; max-height: 85vh; overflow-y: auto; box-shadow: 0 0 20px rgba(0,0,0,0.3); }
+        .modal-box h3 { margin-top: 0; }
+        .modal-cerrar { float: right; cursor: pointer; font-size: 22px; font-weight: bold; color: #666; line-height: 1; }
+        .tabla-cuadres-guardados { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+        .tabla-cuadres-guardados th, .tabla-cuadres-guardados td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+        .tabla-cuadres-guardados th { background-color: #e9ecef; }
+        .badge-cuadra { color: green; font-weight: bold; }
+        .badge-descuadre { color: red; font-weight: bold; }
+        .btn-mini { padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 4px; }
+        .btn-cargar { background-color: #007bff; color: white; }
+        .btn-eliminar { background-color: #dc3545; color: white; }
+        .btn-volver-vivo { background-color: #6c757d; color: white; }
+    </style>
+</head>
+<body>
+    <h2>Control de Cuadre de Caja - Tecnosoft Ti</h2>
+
+    <div class="top-bar">
+        <div class="filtros">
+            <div class="control-group">
+                <label for="filtro-fecha">Fecha:</label>
+                <input type="date" id="filtro-fecha" onchange="cargarVendedores(); cargarDatosSistema()">
+            </div>
+            <div class="control-group">
+                <label for="filtro-serie">Serie:</label>
+                <select id="filtro-serie" onchange="cargarDatosSistema()">
+                    <option value="">(Todas)</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="filtro-vendedor">Vendedor (aún no filtra):</label>
+                <select id="filtro-vendedor" onchange="seleccionarVendedor()">
+                    <option value="">(Todos)</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="filtro-hora-desde">Hora desde:</label>
+                <input type="time" id="filtro-hora-desde" onchange="cargarDatosSistema()">
+            </div>
+            <div class="control-group">
+                <label for="filtro-hora-hasta">Hora hasta:</label>
+                <input type="time" id="filtro-hora-hasta" onchange="cargarDatosSistema()">
+            </div>
+            <div class="control-group">
+                <label for="tasa">Tasa:</label>
+                <input type="text" id="tasa" value="0,00" oninput="calcularCuadre()">
+            </div>
+        </div>
+
+        <button id="btn-sync" class="btn-sync" onclick="sincronizarDatos()">Sincronizar con A2</button>
+    </div>
+    <!-- SECCIÓN DE AUDITORÍA INTELIGENTE -->
+    <div class="upload-section">
+        <h3>📄 Auditoría IA:</h3>
+        <input type="file" id="comprobantes" multiple accept="image/*,.pdf" style="font-size: 14px;">
+        <button class="btn-upload" onclick="subirComprobantes()" id="btn-upload">Subir y Analizar</button>
+        <span id="upload-status" style="font-size: 13px; font-weight: bold;"></span>
+    </div>
+    <!-- RESULTADO GLOBAL DE LA AUDITORÍA IA -->
+    <div id="contenedor-auditoria" style="display: none; max-width: 900px; margin-bottom: 20px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); border-left: 5px solid #007bff;">
+        <h3 style="color: #0056b3; margin-top: 0;">🤖 Veredicto del Auditor IA</h3>
+
+        <div id="info-auditoria-ejecutada" style="font-size: 13px; margin-bottom: 10px; padding: 8px 10px; border-radius: 4px; background-color: #fff3cd; border: 1px solid #ffe69c; color: #664d03;"></div>
+
+        <div style="font-size: 19px; margin-bottom: 15px; padding: 10px; border-radius: 4px; background-color: #f8f9fa;">
+            <strong>Estado (calculado, no depende de la IA):</strong><br>
+            <span id="estado-calculado" style="font-weight: bold;"></span>
+        </div>
+
+        <details style="margin-bottom: 15px;">
+            <summary style="cursor: pointer; color: #666; font-size: 13px;">Ver narrativa de la IA (referencial — su suma puede tener errores, usa el Estado calculado de arriba como oficial)</summary>
+            <div style="font-size: 14px; margin-top: 8px;">
+                <strong>Estado (texto de la IA):</strong> <span id="ia-veredicto"></span>
+            </div>
+            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 8px; font-size: 14px; color: #333; line-height: 1.5;">
+                <strong>Análisis (texto de la IA):</strong> <br>
+                <span id="ia-analisis"></span>
+            </div>
+        </details>
+
+        <h4 style="margin-bottom: 5px;">📊 Reconciliación calculada (suma exacta, no depende de la IA)</h4>
+        <table id="tabla-reconciliacion" style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 20px;">
+            <thead>
+                <tr style="background-color: #e9ecef;">
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: left;">Tipo</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: right;">Suma Comprobantes</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: right;">Sistema (A2)</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: right;">Diferencia</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: center;">¿Cuadra?</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: left;">Fuente</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Se llena con JS -->
+            </tbody>
+        </table>
+
+        <h4 style="margin-bottom: 5px;">Comprobantes leídos (detalle por archivo)</h4>
+        <table id="tabla-auditoria" style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 0;">
+            <thead>
+                <tr style="background-color: #e9ecef;">
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: left;">Comprobante / Ref</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: center;">Tipo</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: right;">Monto Extraído</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Se llena con JS -->
+            </tbody>
+        </table>
+    </div>
+    <div id="banner-modo-guardado"></div>
+    <div class="acciones-cuadre">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap: wrap;">
+            <button class="btn-guardar-cuadre" onclick="guardarCuadreActual()">💾 Guardar Cuadre</button>
+            <input type="text" id="notas-cuadre" placeholder="Nota (opcional, ej. turno mañana)">
+        </div>
+        <button class="btn-ver-guardados" onclick="abrirModalCuadres()">📂 Cuadres Guardados</button>
+    </div>
+    <table id="tabla-cuadre">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Monto Caja</th>
+                <th>Monto Ventas</th>
+                <th>Monto $</th>
+                <th>Diferencia Bs</th>
+                <th>Diferencia $</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Generado por JS -->
+        </tbody>
+    </table>
+
+    <!-- MODAL: CUADRES DE CAJA GUARDADOS -->
+    <div class="modal-overlay" id="modal-cuadres" onclick="if(event.target===this) cerrarModalCuadres()">
+        <div class="modal-box">
+            <span class="modal-cerrar" onclick="cerrarModalCuadres()">&times;</span>
+            <h3>📂 Cuadres de Caja Guardados</h3>
+            <div style="display:flex; gap:15px; flex-wrap:wrap; margin-bottom:10px; align-items:center;">
+                <div class="control-group">
+                    <label for="filtro-cuadres-desde">Desde:</label>
+                    <input type="date" id="filtro-cuadres-desde" onchange="cargarListaCuadres()">
+                </div>
+                <div class="control-group">
+                    <label for="filtro-cuadres-hasta">Hasta:</label>
+                    <input type="date" id="filtro-cuadres-hasta" onchange="cargarListaCuadres()">
+                </div>
+                <div class="control-group">
+                    <label for="filtro-cuadres-serie">Serie:</label>
+                    <input type="text" id="filtro-cuadres-serie" style="width:60px; text-transform:uppercase;" oninput="cargarListaCuadres()">
+                </div>
+            </div>
+            <table class="tabla-cuadres-guardados">
+                <thead>
+                    <tr>
+                        <th>Fecha</th><th>Serie</th><th>Hora</th><th>Tasa</th>
+                        <th>Estado</th><th>Nota</th><th>Guardado</th><th></th>
+                    </tr>
+                </thead>
+                <tbody id="tbody-cuadres-guardados">
+                    <tr><td colspan="8" style="text-align:center; color:#888;">Cargando...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script type="module">
+        // Este bloque separado (type="module") es el único lugar donde se puede usar
+        // "import" en HTML plano. Solo trae la función upload() de Vercel Blob desde un
+        // CDN (no hace falta instalar nada ni usar un bundler) y la deja colgada de
+        // "window" para que el resto del código (el <script> normal de abajo, con todos
+        // los onclick="..." del HTML) pueda usarla igual que cualquier función global.
+        //
+        // Si al probar ves en la consola del navegador (F12) un error de "Failed to
+        // resolve module" o similar en esta línea, prueba cambiando la URL de esm.sh por:
+        //   https://cdn.jsdelivr.net/npm/@vercel/blob@2/+esm
+        import { upload } from 'https://esm.sh/@vercel/blob/client';
+        window.__vercelBlobUpload = upload;
+    </script>
+    <script>
+        const conceptos = [
+            "Fondo Caja Bs", "Fondo Caja $", "Efectivo", "Cheque", "Tarjeta de Débito",
+            "Tarjeta de Crédito", "Retenciones", "Adelantos", "Apartados", "Transferencias",
+            "PagoMóvil", "Dolar ($)", "Zelle (Z)", "CASHEA", "Diferencial Cambiario",
+            "Cambios/Devoluciones", "Vuelto Bs", "Vuelto $"
+        ];
+
+        // En el sistema A2 de este comercio, el concepto "Cheque" en realidad se usa para
+        // registrar pagos por PagoMóvil (no hay un código nativo para eso). Por eso se muestra
+        // con la etiqueta "PagoMóvil" en pantalla, aunque internamente sigue siendo la key "Cheque".
+        // La fila "PagoMóvil" original (siempre vacía) se oculta para no duplicar el nombre.
+        const ETIQUETAS_DISPLAY = { "Cheque": "PagoMóvil" };
+        const CONCEPTOS_OCULTOS = ["PagoMóvil"];
+        const conceptosVisibles = conceptos.filter(c => !CONCEPTOS_OCULTOS.includes(c));
+
+        // --- Auditoría IA: ahora corre en Vercel (funciones /api/auditar y /api/blob-upload-token) ---
+        // Como este index.html se despliega en el MISMO proyecto de Vercel que esas dos
+        // funciones, las rutas son relativas ("/api/...") -- no hace falta poner un dominio.
+        // Lo único que tienes que cambiar es el secreto: debe ser EXACTAMENTE el mismo valor
+        // que pusiste en Vercel en la variable de entorno AUDIT_SHARED_SECRET (ver README).
+        // Si no coincide, verás "Secreto de auditoría ausente o incorrecto" al subir fotos.
+        const AUDIT_API_URL = "/api/auditar";
+        const BLOB_TOKEN_URL = "/api/blob-upload-token";
+        const AUDIT_SHARED_SECRET = "PON_AQUI_EL_MISMO_SECRETO_QUE_CONFIGURASTE_EN_VERCEL";
+
+        let totalesSistema = {};
+        // Guarda la última respuesta de /api/auditar (o la de un cuadre guardado que se
+        // volvió a cargar), para poder incluirla si el usuario presiona "Guardar Cuadre".
+        // null si todavía no se hizo/cargó ninguna auditoría IA para el cuadre actual.
+        let ultimaAuditoriaIA = null;
+        const formatoVE = new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        function parseNum(str) {
+            if (!str) return 0;
+            let num = parseFloat(str.toString().replace(/\./g, '').replace(',', '.'));
+            return isNaN(num) ? 0 : num;
+        }
+        function construirTablaVacia() {
+            const tbody = document.querySelector("#tabla-cuadre tbody");
+            tbody.innerHTML = "";
+
+            conceptosVisibles.forEach(concepto => {
+                const tr = document.createElement("tr");
+                const esFondo = concepto.includes("Fondo");
+                const etiqueta = ETIQUETAS_DISPLAY[concepto] || concepto;
+                let html = `<td>${etiqueta}</td>`;
+                let valorPrevio = sessionStorage.getItem(`caja-${concepto}`) || (esFondo ? '' : '0,00');
+                html += `<td class="bg-blue">
+                            <input type="text" id="caja-${concepto}" value="${valorPrevio}" oninput="guardarYCalcular('${concepto}')">
+                         </td>`;
+
+                if (esFondo) {
+                    html += `<td class="bg-gray" colspan="4"></td>`;
+                } else {
+                    html += `
+                        <td id="ventas-${concepto}">0,00</td>
+                        <td id="usd-${concepto}">0,00</td>
+                        <td id="difbs-${concepto}">0,00</td>
+                        <td id="difusd-${concepto}">0,00</td>
+                    `;
+                }
+                tr.innerHTML = html;
+                tbody.appendChild(tr);
+            });
+        }
+        async function cargarSeries() {
+            // Llena el <select> de series con los valores reales que existen en la base, en vez
+            // de que el usuario tenga que escribirla a mano. Conserva la selección actual si
+            // sigue existiendo en la lista nueva (ej. después de "Sincronizar con A2").
+            const selectSerie = document.getElementById('filtro-serie');
+            const valorPrevio = selectSerie.value;
+            try {
+                const response = await fetch('/api/series');
+                const data = await response.json();
+                const series = Array.isArray(data.series) ? data.series : [];
+
+                selectSerie.innerHTML = '<option value="">(Todas)</option>';
+                series.forEach(serie => {
+                    const opt = document.createElement('option');
+                    opt.value = serie;
+                    opt.textContent = serie;
+                    selectSerie.appendChild(opt);
+                });
+
+                if (series.includes(valorPrevio)) {
+                    selectSerie.value = valorPrevio;
+                }
+            } catch (error) {
+                console.error("Error cargando la lista de series:", error);
+            }
+        }
+        async function cargarVendedores() {
+            // Llena el <select> de vendedor con el catálogo REAL de A2 (Svendedores.dat).
+            // ⚠️ TEMPORAL: todavía no se identificó qué campo de SOperacionInv conecta cada
+            // documento con su vendedor, así que por ahora esta lista es solo informativa —
+            // elegir un vendedor no filtra los totales todavía (ver seleccionarVendedor()).
+            const selectVendedor = document.getElementById('filtro-vendedor');
+            const valorPrevio = selectVendedor.value;
+            try {
+                const response = await fetch('/api/vendedores');
+                const data = await response.json();
+                const vendedores = Array.isArray(data.vendedores) ? data.vendedores : [];
+
+                selectVendedor.innerHTML = '<option value="">(Todos)</option>';
+                vendedores.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v.codigo;
+                    opt.textContent = v.descripcion;
+                    selectVendedor.appendChild(opt);
+                });
+
+                if ([...selectVendedor.options].some(o => o.value === valorPrevio)) {
+                    selectVendedor.value = valorPrevio;
+                }
+            } catch (error) {
+                console.error("Error cargando la lista de vendedores:", error);
+            }
+        }
+        function seleccionarVendedor() {
+            // ⚠️ Pendiente: el filtro por vendedor todavía no está conectado a los totales
+            // (falta confirmar el campo de A2 que enlaza cada documento con su vendedor).
+            // Por ahora solo avisamos, para no dar la falsa impresión de que ya filtra.
+            const vendedor = document.getElementById('filtro-vendedor');
+            if (vendedor.value) {
+                alert("El filtro por vendedor todavía no está activo (falta un dato pendiente de A2). Por ahora esta lista es solo de referencia.");
+            }
+        }
+        async function cargarDatosSistema() {
+            // Cambiar fecha/serie/hora trae datos EN VIVO nuevos -- cualquier auditoría IA o
+            // cuadre guardado que estuviera mostrándose ya no corresponde a estos totales, así
+            // que se limpian para no guardar por error una auditoría vieja junto a totales nuevos.
+            ultimaAuditoriaIA = null;
+            document.getElementById('contenedor-auditoria').style.display = "none";
+            const bannerGuardado = document.getElementById('banner-modo-guardado');
+            bannerGuardado.style.display = "none";
+            bannerGuardado.innerHTML = "";
+
+            const fecha = document.getElementById('filtro-fecha').value;
+            const serie = document.getElementById('filtro-serie').value.toUpperCase();
+            const horaDesde = document.getElementById('filtro-hora-desde').value;
+            const horaHasta = document.getElementById('filtro-hora-hasta').value;
+            const paramsHora = `&hora_desde=${encodeURIComponent(horaDesde)}&hora_hasta=${encodeURIComponent(horaHasta)}`;
+
+            try {
+                const urlTotales = `/api/totales?fecha=${encodeURIComponent(fecha)}&serie=${encodeURIComponent(serie)}${paramsHora}`;
+                const responseTotales = await fetch(urlTotales);
+                totalesSistema = await responseTotales.json();
+
+                conceptosVisibles.forEach(concepto => {
+                    if (!concepto.includes("Fondo")) {
+                        const montoSistema = totalesSistema[concepto] || 0;
+                        document.getElementById(`ventas-${concepto}`).textContent = formatoVE.format(montoSistema);
+                    }
+                });
+                const urlTasa = `/api/tasa?fecha=${encodeURIComponent(fecha)}&serie=${encodeURIComponent(serie)}${paramsHora}`;
+                const responseTasa = await fetch(urlTasa);
+                const dataTasa = await responseTasa.json();
+
+                let inputTasa = document.getElementById("tasa");
+                if (inputTasa) {
+                    if (dataTasa.tasa > 0) {
+                        inputTasa.value = formatoVE.format(dataTasa.tasa);
+                        inputTasa.readOnly = true;
+                        inputTasa.style.backgroundColor = "#e9ecef";
+                    } else {
+                        inputTasa.readOnly = false;
+                        inputTasa.style.backgroundColor = "#ffffff";
+                    }
+                }
+
+                calcularCuadre();
+            } catch (error) {
+                console.error("Error cargando los datos del sistema:", error);
+            }
+        }
+        function guardarYCalcular(concepto) {
+            sessionStorage.setItem(`caja-${concepto}`, document.getElementById(`caja-${concepto}`).value);
+            calcularCuadre();
+        }
+        function calcularCuadre() {
+            const tasa = parseNum(document.getElementById('tasa').value) || 1;
+            conceptosVisibles.forEach(concepto => {
+                if (concepto.includes("Fondo")) return;
+                const montoCaja = parseNum(document.getElementById(`caja-${concepto}`).value);
+                const montoSistema = totalesSistema[concepto] || 0;
+                const montoUSD = montoSistema / tasa;
+                const difBs = montoCaja - montoSistema;
+                const difUSD = difBs / tasa;
+                document.getElementById(`usd-${concepto}`).textContent = formatoVE.format(montoUSD);
+
+                const difBsEl = document.getElementById(`difbs-${concepto}`);
+                const difUsdEl = document.getElementById(`difusd-${concepto}`);
+
+                difBsEl.textContent = formatoVE.format(difBs);
+                difUsdEl.textContent = formatoVE.format(difUSD);
+                difBsEl.className = difBs > 0.01 ? 'positive' : (difBs < -0.01 ? 'negative' : 'neutral');
+                difUsdEl.className = difUSD > 0.01 ? 'positive' : (difUSD < -0.01 ? 'negative' : 'neutral');
+            });
+        }
+        async function sincronizarDatos() {
+            const btn = document.getElementById('btn-sync');
+            btn.disabled = true;
+            btn.textContent = "Sincronizando...";
+            try {
+                const response = await fetch('/sincronizar', { method: 'POST' });
+                const result = await response.json();
+
+                if (result.status === "success") {
+                    cargarSeries();
+                    cargarVendedores();
+                    cargarDatosSistema();
+                } else {
+                    alert("Error al sincronizar: " + result.message);
+                }
+            } catch (error) {
+                alert("Error de conexión.");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "Sincronizar con A2";
+            }
+        }
+        function pintarAuditoria(datosIA, infoContextoHtml) {
+            // Pinta el resultado de una auditoría IA en el panel "🤖 Veredicto del Auditor IA".
+            // Se extrajo a su propia función porque se usa en DOS casos: (a) justo después de
+            // que /api/auditar responde (subirComprobantes), y (b) al cargar un cuadre GUARDADO
+            // que tenía una auditoría asociada (cargarCuadreGuardado) -- en vez de duplicar todo
+            // este pintado dos veces.
+            const contenedorAuditoria = document.getElementById('contenedor-auditoria');
+            const tbodyAuditoria = document.querySelector('#tabla-auditoria tbody');
+            const tbodyReconciliacion = document.querySelector('#tabla-reconciliacion tbody');
+            const faltantes = Array.isArray(datosIA.archivos_no_analizados) ? datosIA.archivos_no_analizados : [];
+
+            contenedorAuditoria.style.display = "block";
+
+            document.getElementById('info-auditoria-ejecutada').innerHTML = infoContextoHtml;
+
+            // Estado OFICIAL: viene calculado en Python (reconciliacion_calculada.veredicto_calculado),
+            // no del texto de la IA — así nunca se contradice con la tabla de reconciliación.
+            const estadoCalculadoEl = document.getElementById('estado-calculado');
+            const veredictoCalc = datosIA.reconciliacion_calculada && datosIA.reconciliacion_calculada.veredicto_calculado
+                ? datosIA.reconciliacion_calculada.veredicto_calculado
+                : "No se pudo calcular el estado.";
+            estadoCalculadoEl.textContent = veredictoCalc;
+            estadoCalculadoEl.style.color = veredictoCalc.startsWith("✅") ? "green" : "red";
+
+            // Narrativa de la IA: solo texto de referencia, sin colorear como si fuera oficial.
+            document.getElementById('ia-veredicto').textContent = datosIA.veredicto_final ? String(datosIA.veredicto_final) : "Sin veredicto de la IA.";
+            document.getElementById('ia-analisis').textContent = datosIA.analisis_detallado || "Sin análisis detallado.";
+
+            // Tabla de reconciliación calculada en Python (fuente de verdad para los montos).
+            tbodyReconciliacion.innerHTML = "";
+            const reconciliacion = datosIA.reconciliacion_calculada;
+            if (reconciliacion && reconciliacion.por_tipo) {
+                Object.entries(reconciliacion.por_tipo).forEach(([tipo, r]) => {
+                    const tr = document.createElement("tr");
+                    // Una diferencia "insignificante" (dentro de tolerancia, ej. Bs. 1,00) cuadra
+                    // igual (✅), pero se muestra en un tono ámbar discreto en vez de verde puro,
+                    // para que quede visible sin dar la misma alarma que un descuadre real (❌).
+                    const colorDif = !r.cuadra ? "red" : (r.diferencia_insignificante ? "#b8860b" : "green");
+                    const icono = !r.cuadra ? "❌" : (r.diferencia_insignificante ? "✅" : "✅");
+                    const notaRedondeo = r.diferencia_insignificante
+                        ? ` <span style="color:#b8860b; font-size:11px;">(redondeo, dentro de tolerancia)</span>`
+                        : "";
+                    // Cashea se compara en dólares ($), todo lo demás en Bs. — el prefijo deja
+                    // claro en qué moneda está cada fila para no confundirlas visualmente.
+                    const prefijo = r.moneda === "USD" ? "$" : "";
+                    const fmt = (v) => (v === null || v === undefined) ? "—" : `${prefijo}${formatoVE.format(v)}`;
+                    tr.innerHTML = `
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: left;">${tipo} <span style="color:#888; font-size:12px;">(sistema: ${r.clave_sistema})</span></td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: right;">${fmt(r.suma_comprobantes)}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: right;">${fmt(r.monto_sistema)}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: right; color:${colorDif}; font-weight:bold;">${fmt(r.diferencia)}${notaRedondeo}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: center;">${icono}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: left; color:#888; font-size:12px;">${r.fuente || '-'}</td>
+                    `;
+                    tbodyReconciliacion.appendChild(tr);
+                });
+            } else {
+                tbodyReconciliacion.innerHTML = `<tr><td colspan="6" style="padding: 8px; text-align: center; color:#888;">No se pudo calcular la reconciliación.</td></tr>`;
+            }
+
+            tbodyAuditoria.innerHTML = "";
+            if (Array.isArray(datosIA.comprobantes_leidos) && datosIA.comprobantes_leidos.length > 0) {
+                datosIA.comprobantes_leidos.forEach(comp => {
+                    const tr = document.createElement("tr");
+                    const debitoLote = (comp.total_fila_debito || 0) + (comp.total_fila_mc_visa_debit || 0);
+                    const partesLote = [];
+                    if (debitoLote) partesLote.push(`Débito: ${formatoVE.format(debitoLote)}`);
+                    if (comp.total_fila_credito) partesLote.push(`Crédito: ${formatoVE.format(comp.total_fila_credito)}`);
+                    if (comp.total_fila_extrafin) partesLote.push(`ExtraFin: ${formatoVE.format(comp.total_fila_extrafin)}`);
+                    if (comp.terminal_identificador) partesLote.push(`terminal: ${comp.terminal_identificador}`);
+                    const detalleLote = partesLote.length ? ` [${partesLote.join(' | ')}]` : "";
+                    let resumen = "";
+                    if (comp.tipo === "Cashea") {
+                        resumen = " (resumen del día)";
+                    } else if (comp.es_resumen_no_cobro) {
+                        resumen = ` (cierre de lote${detalleLote})`;
+                    }
+                    const prefijoMonto = comp.tipo === "Cashea" ? "$" : "";
+                    tr.innerHTML = `
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: left;">${(comp.archivo || comp.referencia || '-')}${resumen}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: center;">${comp.tipo || '-'}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${(comp.monto !== undefined && comp.monto !== null) ? prefijoMonto + formatoVE.format(comp.monto) : '-'}</td>
+                    `;
+                    tbodyAuditoria.appendChild(tr);
+                });
+            }
+            faltantes.forEach(nombreArchivo => {
+                const tr = document.createElement("tr");
+                tr.style.backgroundColor = "#fff3cd";
+                tr.innerHTML = `
+                    <td style="padding: 8px; border: 1px solid #ccc; text-align: left;">${nombreArchivo}</td>
+                    <td style="padding: 8px; border: 1px solid #ccc; text-align: center; color:#c77700; font-weight:bold;">⚠️ NO ANALIZADO POR LA IA</td>
+                    <td style="padding: 8px; border: 1px solid #ccc; text-align: right;">-</td>
+                `;
+                tbodyAuditoria.appendChild(tr);
+            });
+        }
+        async function subirComprobantes() {
+            const input = document.getElementById('comprobantes');
+            const statusLabel = document.getElementById('upload-status');
+            const btn = document.getElementById('btn-upload');
+
+            if (input.files.length === 0) {
+                statusLabel.textContent = "⚠️ Selecciona al menos un archivo.";
+                statusLabel.style.color = "red";
+                return;
+            }
+            // Guardamos una foto de "qué se está auditando realmente" (fecha/serie activas +
+            // nombres de archivo seleccionados) para mostrarla junto al resultado. Esto evita
+            // confusiones cuando el filtro de fecha quedó en un día pero el selector de
+            // archivos todavía tenía cargados los comprobantes de OTRO día.
+            const fechaAuditada = document.getElementById('filtro-fecha').value || "(sin fecha seleccionada)";
+            const serieAuditada = document.getElementById('filtro-serie').value || "(sin serie)";
+            const nombresArchivosAuditados = Array.from(input.files).map(f => f.name);
+
+            // 1. Recopilamos el estado actual de la tabla
+            let datosTabla = {};
+            conceptosVisibles.forEach(concepto => {
+                if (!concepto.includes("Fondo")) {
+                    datosTabla[concepto] = {
+                        monto_caja_declarado: document.getElementById(`caja-${concepto}`).value || "0,00",
+                        monto_ventas_sistema: document.getElementById(`ventas-${concepto}`).innerText || "0,00",
+                        diferencia_bs: document.getElementById(`difbs-${concepto}`).innerText || "0,00"
+                    };
+                }
+            });
+            // Tasa del día: necesaria para comparar Cashea (que solo trae el monto en $ en el
+            // comprobante fotografiado) contra el total del sistema, que está guardado en Bs.
+            // Se manda aparte con clave "_tasa_dia" porque no es un concepto/fila de la tabla.
+            datosTabla["_tasa_dia"] = document.getElementById('tasa').value || "0";
+
+            btn.disabled = true;
+
+            // 2. Subimos cada comprobante DIRECTO a Vercel Blob (no pasa por nuestro
+            // servidor -- así evitamos el límite de 4.5 MB por petición que tienen las
+            // funciones de Vercel). Recién cuando todas las subidas terminan, mandamos
+            // la lista de URLs resultantes a /api/auditar -- eso sí pesa poco, son solo
+            // textos cortos.
+            const archivosSubidos = [];
+            for (let i = 0; i < input.files.length; i++) {
+                const archivo = input.files[i];
+                statusLabel.textContent = `⏳ Subiendo comprobante ${i + 1} de ${input.files.length} (${archivo.name})...`;
+                statusLabel.style.color = "blue";
+                try {
+                    const blobResultado = await window.__vercelBlobUpload(`comprobantes/${archivo.name}`, archivo, {
+                        access: 'public',
+                        handleUploadUrl: BLOB_TOKEN_URL,
+                        clientPayload: JSON.stringify({ secret: AUDIT_SHARED_SECRET }),
+                    });
+                    archivosSubidos.push({
+                        nombre: archivo.name,
+                        url: blobResultado.url,
+                        content_type: archivo.type,
+                    });
+                } catch (error) {
+                    console.error(`Fallo subiendo '${archivo.name}' a Vercel Blob:`, error);
+                    statusLabel.textContent = `❌ No se pudo subir "${archivo.name}": ` + (error.message || 'error desconocido') +
+                        ' (revisa que AUDIT_SHARED_SECRET en este archivo coincida con la variable configurada en Vercel).';
+                    statusLabel.style.color = "red";
+                    btn.disabled = false;
+                    return;
+                }
+            }
+
+            // 3. Ya con las URLs de Blob, pedimos la auditoría en sí (esto sí puede tardar,
+            // porque adentro el servidor descarga cada imagen y llama a Claude).
+            const cuerpoAuditoria = {
+                archivos: archivosSubidos,
+                totales_json: JSON.stringify(datosTabla),
+            };
+            statusLabel.textContent = "⏳ Claude está analizando todos los datos (puede tardar varios minutos con modelos grandes y muchos archivos)...";
+            statusLabel.style.color = "blue";
+
+            // Timeout explícito y distinguible del resto de errores.
+            // 240s (4 min) porque con modelos más grandes (ej. Sonnet) y 10-15 imágenes
+            // la IA puede tardar bastante más que con Haiku.
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 240000);
+
+            let response;
+            try {
+                response = await fetch(AUDIT_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Audit-Secret': AUDIT_SHARED_SECRET,
+                    },
+                    body: JSON.stringify(cuerpoAuditoria),
+                    signal: controller.signal
+                });
+            } catch (error) {
+                clearTimeout(timeoutId);
+                console.error("Fallo la solicitud /api/auditar:", error);
+                if (error.name === 'AbortError') {
+                    statusLabel.textContent = "❌ Tiempo de espera agotado (más de 4 min). Prueba con menos archivos, un modelo más rápido, o revisa tu conexión.";
+                } else {
+                    statusLabel.textContent = "❌ Error de red al contactar al servidor: " + error.message;
+                }
+                statusLabel.style.color = "red";
+                btn.disabled = false;
+                return;
+            }
+            clearTimeout(timeoutId);
+
+            let result;
+            try {
+                result = await response.json();
+            } catch (error) {
+                console.error("La respuesta del servidor no es JSON válido:", error);
+                statusLabel.textContent = "❌ El servidor respondió pero en un formato inválido. Revisa auditoria_ia.log en el servidor.";
+                statusLabel.style.color = "red";
+                btn.disabled = false;
+                return;
+            }
+
+            if (!response.ok) {
+                console.error("El servidor respondió con error HTTP", response.status, result);
+                statusLabel.textContent = `❌ Error del servidor (HTTP ${response.status}): ` + (result.message || 'sin detalle');
+                statusLabel.style.color = "red";
+                btn.disabled = false;
+                return;
+            }
+
+            // A partir de aquí ya tenemos una respuesta HTTP 200 válida.
+            // Cualquier error de aquí en adelante es de PINTADO/DATOS, no de conexión,
+            // así que lo mostramos de forma distinta y nunca lo confundimos con "Error de conexión".
+            try {
+                if (result.status === "success") {
+                    const datosIA = result.data || {};
+                    const faltantes = Array.isArray(datosIA.archivos_no_analizados) ? datosIA.archivos_no_analizados : [];
+
+                    if (faltantes.length > 0) {
+                        statusLabel.textContent = `⚠️ Análisis completado, pero ${faltantes.length} archivo(s) NO fueron analizados: ${faltantes.join(', ')}`;
+                        statusLabel.style.color = "#c77700";
+                    } else {
+                        statusLabel.textContent = "✅ Análisis Completado.";
+                        statusLabel.style.color = "green";
+                    }
+
+                    // Mostramos explícitamente qué fecha/serie y qué archivos se auditaron en ESTA
+                    // corrida, para detectar de un vistazo si el filtro de fecha y los archivos
+                    // seleccionados no correspondían al mismo día (causa típica de "descuadres" falsos).
+                    const infoHtml =
+                        `📌 Esta auditoría comparó <strong>${nombresArchivosAuditados.length} archivo(s)</strong> ` +
+                        `contra el sistema A2 de la fecha <strong>${fechaAuditada}</strong> (serie ${serieAuditada}).<br>` +
+                        `Archivos: ${nombresArchivosAuditados.join(', ')}`;
+                    pintarAuditoria(datosIA, infoHtml);
+
+                    // Se guarda para que "💾 Guardar Cuadre" pueda incluir esta auditoría junto
+                    // con el cuadre (si el usuario decide guardar después de auditar).
+                    ultimaAuditoriaIA = datosIA;
+
+                    input.value = "";
+                } else {
+                    statusLabel.textContent = "❌ Error: " + (result.message || 'desconocido');
+                    statusLabel.style.color = "red";
+                    console.error(result.raw || result);
+                }
+            } catch (error) {
+                // Esto ya NO es un error de conexión: la IA respondió bien, pero algo
+                // falló al pintar los datos en la página. Lo dejamos explícito en consola.
+                console.error("La IA respondió correctamente pero hubo un error al mostrar los resultados:", error, result);
+                statusLabel.textContent = "❌ La IA respondió, pero hubo un error al mostrar los resultados. Revisa la consola (F12).";
+                statusLabel.style.color = "red";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        async function guardarCuadreActual() {
+            // Guarda una "foto" completa del cuadre actual (montos declarados en caja + lo que
+            // decía el sistema A2 en ese momento + la auditoría IA, si se hizo/cargó una) para
+            // poder consultarla después en "📂 Cuadres Guardados", sin depender de que el sistema
+            // A2 todavía tenga esos datos disponibles más adelante.
+            const fecha = document.getElementById('filtro-fecha').value;
+            if (!fecha) {
+                alert("Selecciona una fecha (filtro de arriba) antes de guardar el cuadre.");
+                return;
+            }
+            const serie = document.getElementById('filtro-serie').value;
+            const horaDesde = document.getElementById('filtro-hora-desde').value;
+            const horaHasta = document.getElementById('filtro-hora-hasta').value;
+            const tasa = parseNum(document.getElementById('tasa').value);
+            const notas = document.getElementById('notas-cuadre').value || "";
+
+            const cajas = {};
+            conceptosVisibles.forEach(concepto => {
+                cajas[concepto] = document.getElementById(`caja-${concepto}`).value || "0,00";
+            });
+
+            const cuerpo = {
+                fecha, serie, hora_desde: horaDesde, hora_hasta: horaHasta, tasa,
+                cajas, totales_sistema: totalesSistema, auditoria: ultimaAuditoriaIA, notas,
+            };
+
+            try {
+                const response = await fetch('/api/cuadres', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cuerpo),
+                });
+                const result = await response.json();
+                if (result.status === "success") {
+                    alert(`✅ Cuadre guardado (fecha ${fecha}${serie ? ', serie ' + serie : ''}) — estado: ${result.estado}.\nYa puedes consultarlo en "📂 Cuadres Guardados".`);
+                    document.getElementById('notas-cuadre').value = "";
+                } else {
+                    alert("❌ No se pudo guardar el cuadre: " + (result.message || "error desconocido"));
+                }
+            } catch (error) {
+                console.error("Error guardando el cuadre:", error);
+                alert("❌ Error de conexión al guardar el cuadre.");
+            }
+        }
+
+        function abrirModalCuadres() {
+            document.getElementById('modal-cuadres').classList.add('abierto');
+            cargarListaCuadres();
+        }
+        function cerrarModalCuadres() {
+            document.getElementById('modal-cuadres').classList.remove('abierto');
+        }
+
+        async function cargarListaCuadres() {
+            const tbody = document.getElementById('tbody-cuadres-guardados');
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#888;">Cargando...</td></tr>`;
+            const desde = document.getElementById('filtro-cuadres-desde').value;
+            const hasta = document.getElementById('filtro-cuadres-hasta').value;
+            const serie = document.getElementById('filtro-cuadres-serie').value;
+            try {
+                const url = `/api/cuadres?fecha_desde=${encodeURIComponent(desde)}&fecha_hasta=${encodeURIComponent(hasta)}&serie=${encodeURIComponent(serie)}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                const cuadres = Array.isArray(data.cuadres) ? data.cuadres : [];
+                if (cuadres.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#888;">No hay cuadres guardados con estos filtros.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = "";
+                cuadres.forEach(c => {
+                    const tr = document.createElement('tr');
+                    const horaTxt = (c.hora_desde || c.hora_hasta) ? `${c.hora_desde || '--:--'} a ${c.hora_hasta || '--:--'}` : '(todo el día)';
+                    const badgeClase = c.estado === 'CUADRA' ? 'badge-cuadra' : (c.estado === 'DESCUADRE' ? 'badge-descuadre' : '');
+                    tr.innerHTML = `
+                        <td>${c.fecha || '-'}</td>
+                        <td>${c.serie || '(todas)'}</td>
+                        <td>${horaTxt}</td>
+                        <td>${c.tasa ? formatoVE.format(c.tasa) : '-'}</td>
+                        <td class="${badgeClase}">${c.estado || '-'}</td>
+                        <td>${c.notas || ''}</td>
+                        <td>${c.fecha_guardado || '-'}</td>
+                        <td>
+                            <button class="btn-mini btn-cargar" onclick="cargarCuadreGuardado(${c.id})">Cargar</button>
+                            <button class="btn-mini btn-eliminar" onclick="eliminarCuadreGuardado(${c.id})">Eliminar</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (error) {
+                console.error("Error cargando la lista de cuadres guardados:", error);
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:red;">Error cargando los cuadres guardados.</td></tr>`;
+            }
+        }
+
+        async function cargarCuadreGuardado(id) {
+            // Carga un cuadre GUARDADO (histórico) en pantalla, tal como quedó al momento de
+            // guardarlo. A propósito NO se vuelve a llamar cargarDatosSistema() (eso traería los
+            // totales EN VIVO de hoy y pisaría los datos históricos) -- se pintan directo los
+            // valores guardados, y queda un banner explicando que no es la vista en vivo.
+            try {
+                const response = await fetch(`/api/cuadres/${id}`);
+                const data = await response.json();
+                if (data.status !== "success") {
+                    alert("No se pudo cargar ese cuadre: " + (data.message || "error desconocido"));
+                    return;
+                }
+                const c = data.cuadre;
+
+                document.getElementById('filtro-fecha').value = c.fecha || '';
+                document.getElementById('filtro-serie').value = c.serie || '';
+                document.getElementById('filtro-hora-desde').value = c.hora_desde || '';
+                document.getElementById('filtro-hora-hasta').value = c.hora_hasta || '';
+
+                const inputTasa = document.getElementById('tasa');
+                inputTasa.value = formatoVE.format(c.tasa || 0);
+                inputTasa.readOnly = true;
+                inputTasa.style.backgroundColor = "#e9ecef";
+
+                totalesSistema = c.totales_sistema || {};
+                conceptosVisibles.forEach(concepto => {
+                    const inputCaja = document.getElementById(`caja-${concepto}`);
+                    if (inputCaja && c.cajas && c.cajas[concepto] !== undefined) {
+                        inputCaja.value = c.cajas[concepto];
+                    }
+                    if (!concepto.includes("Fondo")) {
+                        const montoSistema = totalesSistema[concepto] || 0;
+                        const elVentas = document.getElementById(`ventas-${concepto}`);
+                        if (elVentas) elVentas.textContent = formatoVE.format(montoSistema);
+                    }
+                });
+                calcularCuadre();
+
+                ultimaAuditoriaIA = c.auditoria || null;
+                if (c.auditoria) {
+                    pintarAuditoria(c.auditoria, `📂 Auditoría IA guardada junto con este cuadre (guardado el ${c.fecha_guardado}).`);
+                } else {
+                    document.getElementById('contenedor-auditoria').style.display = "none";
+                }
+
+                const banner = document.getElementById('banner-modo-guardado');
+                banner.style.display = "block";
+                banner.innerHTML =
+                    `📂 Estás viendo el cuadre <strong>GUARDADO</strong> del <strong>${c.fecha}</strong>` +
+                    `${c.serie ? ' (serie ' + c.serie + ')' : ''} — guardado el ${c.fecha_guardado}` +
+                    `${c.notas ? ' — nota: "' + c.notas + '"' : ''}. No son los datos en vivo. ` +
+                    `<button class="btn-mini btn-volver-vivo" onclick="salirModoGuardado()">Volver a datos en vivo</button>`;
+
+                cerrarModalCuadres();
+            } catch (error) {
+                console.error("Error cargando el cuadre guardado:", error);
+                alert("Error de conexión al cargar el cuadre guardado.");
+            }
+        }
+
+        function salirModoGuardado() {
+            const banner = document.getElementById('banner-modo-guardado');
+            banner.style.display = "none";
+            banner.innerHTML = "";
+            document.getElementById('contenedor-auditoria').style.display = "none";
+            ultimaAuditoriaIA = null;
+            cargarVendedores();
+            cargarDatosSistema();
+        }
+
+        async function eliminarCuadreGuardado(id) {
+            if (!confirm("¿Eliminar este cuadre guardado? Esta acción no se puede deshacer.")) return;
+            try {
+                const response = await fetch(`/api/cuadres/${id}`, { method: 'DELETE' });
+                const result = await response.json();
+                if (result.status === "success") {
+                    cargarListaCuadres();
+                } else {
+                    alert("No se pudo eliminar: " + (result.message || "error desconocido"));
+                }
+            } catch (error) {
+                console.error("Error eliminando el cuadre guardado:", error);
+                alert("Error de conexión al eliminar.");
+            }
+        }
+
+        construirTablaVacia();
+        cargarSeries();
+        cargarVendedores();
+        cargarDatosSistema();
+    </script>
+</body>
+</html>

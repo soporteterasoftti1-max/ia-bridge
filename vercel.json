@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/auditar.py": {
+      "maxDuration": 300
+    },
+    "api/blob-upload-token.js": {
+      "maxDuration": 30
+    }
+  }
+}
