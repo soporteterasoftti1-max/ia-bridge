@@ -1,11 +1,14 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/auditar.py": {
-      "maxDuration": 300
-    },
-    "api/blob-upload-token.js": {
-      "maxDuration": 30
+  "builds": [
+    {
+      "src": "api/auditar.py",
+      "use": "@vercel/python"
     }
-  }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/auditar.py"
+    }
+  ]
 }
