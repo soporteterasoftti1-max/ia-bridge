@@ -3,27 +3,25 @@
 """
 api/auditar.py — Microservicio "Auditoría IA" (versión Vercel, archivo único)
 ==============================================================================
-
 Vercel convierte cada archivo .py dentro de la carpeta api/ en su propia
 Vercel Function, mapeada automáticamente a la URL que coincide con la ruta
 del archivo (este archivo -> /api/auditar). Por eso este proyecto debe vivir
 en tu repo exactamente en: api/auditar.py
-
 IMPORTANTE -- por qué este archivo es autocontenido (sin imports propios):
 Vercel empaqueta cada función de /api/ por separado y, en pruebas, no
 siempre incluye módulos hermanos (ej. audit_prompt.py) en el mismo paquete,
 lo que producía "ModuleNotFoundError: No module named 'audit_prompt'". Para
 evitar ese problema de raíz, aquí NO se importa nada que no sea una
 librería instalada (fastapi, anthropic, etc.) -- el prompt completo del
-auditor vive como una constante dentro de este mismo archivo.
-
+auditor se arma como un f-string DENTRO de la función que lo usa (no como
+una constante de módulo aparte), para que no pueda volver a desincronizarse
+del código que lo rellena -- ver la nota junto a "prompt_auditor" más abajo.
 Qué hace este servicio: recibe los comprobantes (imágenes/PDF) más los
 totales del sistema ya calculados por el frontend, llama a la API de Claude
 para clasificarlos, calcula la reconciliación determinística en Python
 (igual que en el main.py original de la app de escritorio/Render) y
 devuelve el JSON de resultado. El resto de la app (dashboard, sync ODBC con
 A2, SQLite) NO vive aquí -- sigue corriendo donde ya estaba.
-
 SEGURIDAD:
 - La API key de Anthropic NUNCA va en el código -- se lee de la variable de
   entorno ANTHROPIC_API_KEY (Vercel Dashboard -> Environment Variables).
@@ -31,18 +29,15 @@ SEGURIDAD:
   entorno AUDIT_SHARED_SECRET, para que nadie más gaste tu cuota de Claude
   llamando a esta URL pública. Tu index.html debe mandar ese mismo valor.
 """
-
 import base64
 import json
 import logging
 import os
 import traceback
 from typing import List
-
 import anthropic
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-
 # ---------------------------------------------------------------------------
 # Logging: Vercel captura stdout/stderr automáticamente y lo muestra en la
 # pestaña "Logs" del proyecto -- no se escribe a un archivo local.
@@ -52,7 +47,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger("auditoria_ia")
-
 # ---------------------------------------------------------------------------
 # Configuración desde variables de entorno (Vercel Dashboard -> tu proyecto
 # -> Settings -> Environment Variables)
@@ -60,20 +54,16 @@ logger = logging.getLogger("auditoria_ia")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AUDIT_SHARED_SECRET = os.environ.get("AUDIT_SHARED_SECRET", "")
 CORS_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",") if o.strip()]
-
 if not ANTHROPIC_API_KEY:
     logger.warning("ANTHROPIC_API_KEY no está configurada -- /api/auditar fallará hasta que la definas en Vercel.")
 if not AUDIT_SHARED_SECRET:
     logger.warning("AUDIT_SHARED_SECRET no está configurada -- el endpoint quedaría SIN protección. Configúrala en Vercel.")
-
 CLIENTE_IA = anthropic.Anthropic(
     api_key=ANTHROPIC_API_KEY,
     timeout=240.0,
     max_retries=2,
 )
-
 app = FastAPI(title="Auditoría IA - servicio de reconciliación")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
@@ -81,8 +71,6 @@ app.add_middleware(
     allow_methods=["POST", "OPTIONS", "GET"],
     allow_headers=["*"],
 )
-
-
 def verificar_secreto(x_audit_secret: str = Header(default="")) -> None:
     """Exige que la petición traiga el header X-Audit-Secret igual a
     AUDIT_SHARED_SECRET. Corta con 401 ANTES de gastar un solo token
@@ -91,8 +79,6 @@ def verificar_secreto(x_audit_secret: str = Header(default="")) -> None:
         return
     if x_audit_secret != AUDIT_SHARED_SECRET:
         raise HTTPException(status_code=401, detail="Header X-Audit-Secret ausente o incorrecto.")
-
-
 # ---------------------------------------------------------------------------
 # Reconciliación determinística (idéntica a la del main.py original) — NO
 # confiar en la suma que redacta la IA como fuente de verdad para los
@@ -104,22 +90,15 @@ TIPO_COMPROBANTE_A_CLAVE_SISTEMA = {
     "Tarjeta de Débito": "Tarjeta de Débito",
     "Tarjeta de Crédito": "Tarjeta de Crédito",
 }
-
 TOLERANCIA_DIFERENCIA_INSIGNIFICANTE_BS = 1.00
 TOLERANCIA_DIFERENCIA_INSIGNIFICANTE_USD = 0.05
-
-
 def _prefijo_moneda(moneda):
     return "$" if moneda == "USD" else "Bs."
-
-
 def formatear_monto_ve(valor):
     try:
         return f"{float(valor):,.2f}".replace(",", "TEMP").replace(".", ",").replace("TEMP", ".")
     except (TypeError, ValueError):
         return "0,00"
-
-
 def parsear_monto_ve(valor):
     if valor is None:
         return 0.0
@@ -132,31 +111,23 @@ def parsear_monto_ve(valor):
         return float(texto.replace(".", "").replace(",", "."))
     except ValueError:
         return 0.0
-
-
 def _num(valor):
     try:
         return float(valor)
     except (TypeError, ValueError):
         return 0.0
-
-
 def _describir_fuente_tarjeta(monto_lote, monto_individual):
     if monto_lote > 0 and monto_individual > 0:
         return "cierres de lote + recibos individuales (de otros terminales)"
     if monto_lote > 0:
         return "cierres de lote del terminal"
     return "comprobantes individuales"
-
-
 def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     try:
         totales_sistema = json.loads(totales_json_str) if totales_json_str else {}
     except (json.JSONDecodeError, TypeError):
         totales_sistema = {}
-
     items = [i for i in (comprobantes_leidos or []) if isinstance(i, dict)]
-
     terminales_cubiertos_por_lote = set()
     suma_lote_debito = 0.0
     suma_lote_credito = 0.0
@@ -175,7 +146,6 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         terminal = (item.get("terminal_identificador") or "").strip()
         if terminal:
             terminales_cubiertos_por_lote.add(terminal)
-
     suma_individual_debito = 0.0
     suma_individual_credito = 0.0
     sumas_individuales_otros = {}
@@ -201,12 +171,10 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
                 suma_individual_credito += monto
         else:
             sumas_individuales_otros[tipo] = sumas_individuales_otros.get(tipo, 0.0) + monto
-
     suma_cashea_usd = 0.0
     for item in items:
         if item.get("tipo") == "Cashea":
             suma_cashea_usd += _num(item.get("monto"))
-
     sumas_finales = {
         "Pago Móvil": sumas_individuales_otros.get("Pago Móvil", 0.0),
         "Transferencia": sumas_individuales_otros.get("Transferencia", 0.0),
@@ -219,13 +187,11 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         "Tarjeta de Débito": _describir_fuente_tarjeta(suma_lote_debito, suma_individual_debito),
         "Tarjeta de Crédito": _describir_fuente_tarjeta(suma_lote_credito, suma_individual_credito),
     }
-
     reconciliacion = {}
     total_general_comprobantes = 0.0
     for tipo, clave_sistema in TIPO_COMPROBANTE_A_CLAVE_SISTEMA.items():
         suma_comprobantes = round(sumas_finales.get(tipo, 0.0), 2)
         fuente = fuentes.get(tipo, "comprobantes individuales")
-
         info_sistema = totales_sistema.get(clave_sistema, {}) if isinstance(totales_sistema, dict) else {}
         monto_sistema = round(parsear_monto_ve(info_sistema.get("monto_ventas_sistema")), 2)
         diferencia = round(suma_comprobantes - monto_sistema, 2)
@@ -242,7 +208,6 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
             "fuente": fuente,
             "moneda": "Bs",
         }
-
     if suma_cashea_usd > 0 or (isinstance(totales_sistema, dict) and totales_sistema.get("CASHEA")):
         tasa_dia = parsear_monto_ve(totales_sistema.get("_tasa_dia")) if isinstance(totales_sistema, dict) else 0.0
         info_cashea = totales_sistema.get("CASHEA", {}) if isinstance(totales_sistema, dict) else {}
@@ -273,7 +238,6 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
                 "fuente": "comprobantes individuales (sin tasa del día para comparar contra el sistema)",
                 "moneda": "USD",
             }
-
     categorias_mal = {t: r for t, r in reconciliacion.items() if not r["cuadra"]}
     categorias_redondeo = {t: r for t, r in reconciliacion.items() if r["diferencia_insignificante"]}
     if not categorias_mal:
@@ -295,16 +259,17 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
                 f"{prefijo} {formatear_monto_ve(r['monto_sistema'])})"
             )
         veredicto_calculado = "⚠️ DESCUADRE DETECTADO — " + " | ".join(partes)
-
     return {
         "por_tipo": reconciliacion,
         "total_general_comprobantes_calculado": round(total_general_comprobantes, 2),
         "veredicto_calculado": veredicto_calculado,
     }
-
-
 # ---------------------------------------------------------------------------
-# Definición de la herramienta (tool use de Claude) — idéntica a la original
+# Definición de la herramienta (tool use de Claude). Incluye "destino_identificador"
+# y "reportes_en_esta_foto" -- agregados para que coincidan con las instrucciones
+# nuevas del prompt (más abajo). Sin declararlos aquí, Claude no puede devolverlos
+# aunque el prompt se lo pida: el tool-calling de la API solo acepta propiedades
+# que estén en este schema.
 # ---------------------------------------------------------------------------
 HERRAMIENTA_AUDITORIA = {
     "name": "registrar_auditoria",
@@ -349,6 +314,14 @@ HERRAMIENTA_AUDITORIA = {
                         "terminal_identificador": {"type": "string"},
                         "comision_pago_movil": {"type": "number"},
                         "total_pago_movil_bruto": {"type": "number"},
+                        "destino_identificador": {
+                            "type": "string",
+                            "description": "OBLIGATORIO cuando tipo = 'Pago Móvil' o 'Transferencia': copia tal cual el número de teléfono (Pago Móvil) o el número de cuenta bancaria (Transferencia) del BENEFICIARIO/destino, tal como aparece impreso (con asteriscos de máscara si así aparece). Sirve de verificación cruzada del 'tipo' elegido, aunque ya estés seguro de cuál es.",
+                        },
+                        "reportes_en_esta_foto": {
+                            "type": "integer",
+                            "description": "SOLO cuando tipo = 'Cierre de Lote / Reporte de Cierre'. Cuántos reportes de cierre INDEPENDIENTES (cada uno con su propio 'L:') aparecen en esta misma foto/archivo, contando este elemento. Ayuda a verificar que no se omitió un segundo reporte impreso debajo del primero en el mismo rollo de papel.",
+                        },
                     },
                     "required": ["archivo", "monto", "tipo"],
                 },
@@ -361,16 +334,45 @@ HERRAMIENTA_AUDITORIA = {
         ],
     },
 }
+@app.get("/")
+def salud():
+    """Health check simple."""
+    return {"status": "ok", "servicio": "auditoria-ia"}
+async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: str):
+    logger.info("Recibida solicitud /api/auditar con %d archivo(s)", len(archivos))
+    try:
+        content_blocks = []
+        archivos_procesados = []
+        for indice, archivo in enumerate(archivos, start=1):
+            contenido_bytes = await archivo.read()
+            base64_encoded = base64.b64encode(contenido_bytes).decode("utf-8")
+            mime_type = archivo.content_type
+            if mime_type.startswith("image/"):
+                tipo_bloque = "image"
+            elif mime_type == "application/pdf":
+                tipo_bloque = "document"
+            else:
+                continue
+            content_blocks.append({
+                "type": "text",
+                "text": f'--- Archivo #{indice} de {len(archivos)}: nombre exacto = "{archivo.filename}" ---'
+            })
+            content_blocks.append({
+                "type": tipo_bloque,
+                "source": {"type": "base64", "media_type": mime_type, "data": base64_encoded}
+            })
+            archivos_procesados.append(archivo.filename)
+        if not content_blocks:
+            return {"status": "error", "message": "No se encontraron formatos de imagen o PDF válidos."}
 
-# ---------------------------------------------------------------------------
-# Prompt del auditor -- EXACTAMENTE el mismo texto de la app original.
-# Va inline (no en un archivo aparte) a propósito: ver nota al inicio del
-# archivo sobre por qué el import cruzado fallaba en Vercel.
-# ---------------------------------------------------------------------------
-PROMPT_AUDITOR_TEMPLATE = """
+        # NOTA sobre este cambio: el prompt se arma como f-string AQUÍ MISMO (no como
+        # una constante de módulo aparte + .format()/.replace()). Así, "{len(archivos)}"
+        # es una expresión real de Python evaluada contra el parámetro "archivos" que
+        # ya está en este scope -- no puede desincronizarse de un mecanismo de relleno
+        # aparte (eso fue justo lo que causó el KeyError: 'len(archivos)' anterior).
+        prompt_auditor = f"""
 Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancario, pago móvil, transferencias).
         Sé estricto, detallista, y NUNCA confundas un tipo de documento con otro por parecido de palabras.
-
         TU ÚNICO TRABAJO ES CLASIFICAR Y EXTRAER DATOS — NO CALCULES NI DECLARES DESCUADRES, FALTANTES,
         SOBRANTES NI NINGUNA COMPARACIÓN CONTRA EL SISTEMA A2. No se te está mostrando el cuadre de caja del
         sistema a propósito: esa comparación la hace por separado un cálculo determinístico en el servidor,
@@ -379,10 +381,8 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
         de si algo cuadra o no, ni un monto de diferencia. Si escribes una frase como "DESCUADRE DETECTADO"
         o "FALTANTE DE X BS", eso es un error de tu parte: no tienes la información del sistema para saber
         eso, y confundirá al usuario que sí puede ver la comparación real más abajo en pantalla.
-
         Vas a recibir varias imágenes de comprobantes. Cada una puede ser UNA de estas categorías.
         Usa EXCLUSIVAMENTE las palabras/estructura del documento (no el contexto general) para clasificar:
-
         1) TARJETA DE DÉBITO o CRÉDITO (compra en punto de venta):
            - Encabezado con nombre del banco emisor (ej: "BANCO DE VENEZUELA", "BANCRECER") y el comercio afiliado.
            - Contiene explícitamente "RECIBO DE COMPRA DEBITO" o "RECIBO DE COMPRA CREDITO".
@@ -396,7 +396,6 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
              el número junto a "T:"/"L:" (ej: "T:2002 L:137") sin inventar un nombre de banco. Si ni el
              banco ni el número de terminal son legibles, deja "terminal_identificador" vacío — nunca lo
              rellenes con un nombre de negocio o un dato que no esté impreso en el documento.
-
         2) CIERRE DE LOTE / REPORTE DE CIERRE (NO es un cobro nuevo, es un resumen del terminal):
            - ⚠️ ANTES QUE NADA, DISTINGUE ESTO: esta categoría (2) es EXCLUSIVAMENTE para cierres impresos
              POR UN BANCO (Banco de Venezuela, Bancrecer, Banesco, Mercantil, etc.) sobre SU terminal de
@@ -498,7 +497,6 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
              caja del día" cuya fecha coincide con la fecha del comprobante que se está auditando.
              NO clasifiques esta pantalla como "Otro" ni como "Cierre de Lote / Reporte de Cierre" — usa
              siempre el tipo dedicado "Cashea".
-
         3) PAGO MÓVIL:
            - ⚠️ NO exijas que el texto diga literalmente "Pago Móvil": cada banco le pone su propio nombre
              comercial a su función de pago móvil (ej. "Tpago" de Banesco, "Pago Móvil BDV", "C-Móvil" de
@@ -534,7 +532,6 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
              — esto es una transcripción de RESPALDO independiente (no la omitas aunque estés seguro de cuál
              valor pusiste en "monto"): permite que el sistema detecte automáticamente si por error pusiste el
              Total en el campo "monto" en vez del Monto neto, y lo corrija.
-
         4) TRANSFERENCIA BANCARIA (real):
            - Contiene una cuenta DESTINO identificada por NÚMERO DE CUENTA BANCARIA (no por teléfono), y viene
              de un screenshot/comprobante de banca en línea o app móvil. Puede decir explícitamente
@@ -564,12 +561,9 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
              "LOTE ACEPTADO" — sin importar que la foto tenga varios recibos distintos pegados uno junto al otro.
              Si tienes dudas sobre a cuál recibo pertenece un monto en una foto con múltiples recibos, y alguno
              de esos recibos en la misma imagen dice "LOTE", clasifica ese monto como categoría (2), no (4).
-
         5) EFECTIVO: no aplica comprobante fotográfico normalmente; ignora salvo que se indique lo contrario.
-
         REGLA DE ORO: si un documento tiene "LOTE" en el texto y una tabla de Compra/Anulada/Total, es
         categoría (2), nunca (4), sin importar qué tan parecido suene a "transferencia".
-
         CASO ESPECIAL — "MONTO Bs. X" pegado a una "TRANSMISIÓN DE LOTE" en la MISMA imagen:
         Algunos terminales imprimen en un mismo rollo de papel, uno debajo del otro, dos documentos: (i) una
         línea suelta "MONTO Bs. X" SIN "RECIBO DE COMPRA", SIN tipo de tarjeta (Maestro/Visa/Mastercard) y
@@ -582,7 +576,6 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
         si tiene los identificadores propios de una compra o transferencia individual (RIF/cédula del pagador,
         tipo de tarjeta, número de referencia de transferencia/pago móvil, etc.) y NO viene pegado a una tabla
         de lote en la misma imagen.
-
         CASO ESPECIAL 2 — recibo de compra INDIVIDUAL completo + reporte de cierre del MISMO terminal, ambos
         impresos uno debajo del otro en la MISMA foto (a diferencia del CASO ESPECIAL de arriba, aquí SÍ hay
         un recibo de compra individual real y completo, con sus propios AID/APRO/REF/TRACE — no es solo un
@@ -592,7 +585,6 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
         Reporte de Cierre" con sus "total_fila_credito"/"total_fila_debito"/"total_fila_mc_visa_debit"/
         "total_fila_extrafin" y el MISMO "terminal_identificador" (para que el sistema los relacione).
         NO combines ambos documentos en un solo elemento, y NO reportes solo uno de los dos ignorando el otro.
-
         CASO ESPECIAL 3 — DOS reportes de cierre de lote DISTINTOS (dos "REPORTE DE CIERRE" o dos "TRANSMISIÓN
         DE LOTE" completos, cada uno con su propio "T:"/"L:") impresos uno debajo del otro en la MISMA foto,
         en el mismo rollo de papel: esto pasa seguido porque el comercio imprime varios cierres de terminal
@@ -660,11 +652,9 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
             con el primer bloque "APROBADO"/TOTAL que veas: sigue leyendo hacia abajo, cuenta los reportes con
             "reportes_en_esta_foto" ANTES de transcribir montos, y verifica cada número dígito por dígito contra
             la sección correcta (no confundas "18.135,68" con un número de tres cifras) antes de darlo por bueno.
-
         Cada imagen viene precedida por una línea de texto "--- Archivo #N de TOTAL: nombre exacto = "..." ---"
         indicando su nombre real de archivo. USA ESE NOMBRE EXACTO (tal cual, con extensión) en el campo
         "archivo" de cada elemento de "comprobantes_leidos". NO inventes ni parafrasees el nombre.
-
         Tu tarea:
         a. Lee cada comprobante, decide su categoría según las reglas de arriba, y extrae el monto exacto.
            NO compares nada contra el sistema A2 — no se te muestra esa información a propósito (ver nota
@@ -688,54 +678,12 @@ Eres un auditor contable experto en comprobantes de pago venezolanos (POS bancar
            elementos para ese archivo (mismo nombre de "archivo" en ambos). En ese caso el total de elementos
            será MAYOR a {len(archivos)}, y eso está bien — nunca sacrifiques la separación de esos dos
            documentos solo por igualar el conteo.
-
         Usa la herramienta "registrar_auditoria" para entregar tu resultado estructurado.
         """
 
-
-@app.get("/")
-def salud():
-    """Health check simple."""
-    return {"status": "ok", "servicio": "auditoria-ia"}
-
-
-async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: str):
-    logger.info("Recibida solicitud /api/auditar con %d archivo(s)", len(archivos))
-    try:
-        content_blocks = []
-        archivos_procesados = []
-
-        for indice, archivo in enumerate(archivos, start=1):
-            contenido_bytes = await archivo.read()
-            base64_encoded = base64.b64encode(contenido_bytes).decode("utf-8")
-            mime_type = archivo.content_type
-
-            if mime_type.startswith("image/"):
-                tipo_bloque = "image"
-            elif mime_type == "application/pdf":
-                tipo_bloque = "document"
-            else:
-                continue
-
-            content_blocks.append({
-                "type": "text",
-                "text": f'--- Archivo #{indice} de {len(archivos)}: nombre exacto = "{archivo.filename}" ---'
-            })
-            content_blocks.append({
-                "type": tipo_bloque,
-                "source": {"type": "base64", "media_type": mime_type, "data": base64_encoded}
-            })
-            archivos_procesados.append(archivo.filename)
-
-        if not content_blocks:
-            return {"status": "error", "message": "No se encontraron formatos de imagen o PDF válidos."}
-
-        prompt_auditor = PROMPT_AUDITOR_TEMPLATE.format(n_archivos=len(archivos))
         content_blocks.append({"type": "text", "text": prompt_auditor})
-
         peso_mb = sum(len(b["source"]["data"]) for b in content_blocks if b["type"] in ("image", "document")) / 1_000_000
         logger.info("Payload de %d bloque(s), ~%.2f MB en base64. Llamando a la API de Anthropic...", len(content_blocks), peso_mb)
-
         try:
             respuesta = CLIENTE_IA.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -757,12 +705,10 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
         except anthropic.APIStatusError as e:
             logger.error("La API de Anthropic respondió con error %s: %s", e.status_code, e.response.text)
             return {"status": "error", "message": f"La IA respondió con error {e.status_code}: {e.message}"}
-
         logger.info(
             "Respuesta recibida de Anthropic. stop_reason=%s, tokens_entrada=%s, tokens_salida=%s",
             respuesta.stop_reason, respuesta.usage.input_tokens, respuesta.usage.output_tokens
         )
-
         if respuesta.stop_reason == "max_tokens":
             logger.error("La respuesta se CORTÓ por exceder max_tokens.")
             return {
@@ -770,7 +716,6 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
                 "message": "La IA se quedó sin espacio de respuesta (demasiados comprobantes en un solo lote). "
                             "Intenta subir menos archivos a la vez."
             }
-
         bloque_tool = next((b for b in respuesta.content if b.type == "tool_use"), None)
         if bloque_tool is None:
             logger.warning("Claude no devolvió tool_use. Contenido crudo: %s", respuesta.content)
@@ -780,44 +725,34 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
                 "raw": [b.model_dump() for b in respuesta.content]
             }
         datos_auditoria = bloque_tool.input
-
         campos_faltantes = [
             campo for campo in ("veredicto_final", "analisis_detallado", "comprobantes_leidos")
             if not datos_auditoria.get(campo)
         ]
         if campos_faltantes:
             logger.warning("La respuesta de la IA vino incompleta. Campos vacíos/faltantes: %s", campos_faltantes)
-
         comprobantes = datos_auditoria.get("comprobantes_leidos") or []
         archivos_mencionados = {c.get("archivo") for c in comprobantes if isinstance(c, dict)}
         archivos_faltantes = [a for a in archivos_procesados if a not in archivos_mencionados]
-
         if archivos_faltantes:
             logger.warning(
                 "La IA devolvió %d comprobante(s) pero se subieron %d archivo(s). Faltan: %s",
                 len(comprobantes), len(archivos_procesados), archivos_faltantes
             )
-
         datos_auditoria["archivos_evaluados"] = archivos_procesados
         datos_auditoria["archivos_no_analizados"] = archivos_faltantes
-
         reconciliacion = calcular_reconciliacion(comprobantes, totales_json)
         datos_auditoria["reconciliacion_calculada"] = reconciliacion
         logger.info("Reconciliación calculada (Python): %s", reconciliacion)
-
         mensaje = "Auditoría IA completada con éxito"
         if campos_faltantes:
             mensaje = "Auditoría completada, pero con campos incompletos: " + ", ".join(campos_faltantes)
         if archivos_faltantes:
             mensaje += f" | ATENCIÓN: {len(archivos_faltantes)} archivo(s) subido(s) NO aparecen en el análisis: " + ", ".join(archivos_faltantes)
-
         return {"status": "success", "message": mensaje, "data": datos_auditoria}
-
     except Exception as e:
         logger.error("Excepción no controlada en /api/auditar: %s\n%s", e, traceback.format_exc())
         return {"status": "error", "message": str(e)}
-
-
 # Se registran DOS rutas para el mismo handler ("/api/auditar" y "/") a
 # propósito: en el modo "función por archivo" de Vercel no siempre está claro
 # si el prefijo de carpeta (api/auditar.py -> /api/auditar) llega ya recortado
@@ -830,8 +765,6 @@ async def auditar_comprobantes(
     totales_json: str = Form(...),
 ):
     return await _auditar_comprobantes_impl(archivos, totales_json)
-
-
 @app.post("/", dependencies=[Depends(verificar_secreto)])
 async def auditar_comprobantes_raiz(
     archivos: List[UploadFile] = File(...),
