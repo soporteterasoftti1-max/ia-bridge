@@ -1,13 +1,15 @@
 {
   "builds": [
-    { "src": "api/auditar.py", "use": "@vercel/python" },
-    { "src": "api/blob-upload-token.js", "use": "@vercel/node" },
-    { "src": "index.html", "use": "@vercel/static" }
+    {
+      "src": "api/auditar.py",
+      "use": "@vercel/python"
+    }
   ],
   "routes": [
-    { "src": "/api/blob-upload-token", "dest": "/api/blob-upload-token.js" },
-    { "src": "/api/auditar", "dest": "/api/auditar.py" },
-    { "src": "/", "dest": "/index.html" },
-    { "src": "/(.*)", "dest": "/index.html" }
+    {
+      "src": "/(.*)",
+      "dest": "api/auditar.py"
+    }
   ]
 }
+
