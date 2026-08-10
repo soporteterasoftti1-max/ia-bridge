@@ -60,8 +60,11 @@
         .badge-descuadre { color: red; font-weight: bold; }
         .btn-mini { padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 4px; }
         .btn-cargar { background-color: #007bff; color: white; }
+        .btn-editar { background-color: #ffc107; color: #212529; }
         .btn-eliminar { background-color: #dc3545; color: white; }
         .btn-volver-vivo { background-color: #6c757d; color: white; }
+        .btn-cancelar-edicion { background-color: #6c757d; color: white; }
+        .btn-ver-foto { background-color: #20c997; color: white; margin-right: 0; }
     </style>
 </head>
 <body>
@@ -154,6 +157,7 @@
                     <th style="padding: 8px; border: 1px solid #ccc; text-align: left;">Comprobante / Ref</th>
                     <th style="padding: 8px; border: 1px solid #ccc; text-align: center;">Tipo</th>
                     <th style="padding: 8px; border: 1px solid #ccc; text-align: right;">Monto Extraído</th>
+                    <th style="padding: 8px; border: 1px solid #ccc; text-align: center;">Foto</th>
                 </tr>
             </thead>
             <tbody>
@@ -164,7 +168,7 @@
     <div id="banner-modo-guardado"></div>
     <div class="acciones-cuadre">
         <div style="display:flex; align-items:center; gap:10px; flex-wrap: wrap;">
-            <button class="btn-guardar-cuadre" onclick="guardarCuadreActual()">💾 Guardar Cuadre</button>
+            <button class="btn-guardar-cuadre" id="btn-guardar-cuadre" onclick="guardarCuadreActual()">💾 Guardar Cuadre</button>
             <input type="text" id="notas-cuadre" placeholder="Nota (opcional, ej. turno mañana)">
         </div>
         <button class="btn-ver-guardados" onclick="abrirModalCuadres()">📂 Cuadres Guardados</button>
@@ -217,6 +221,15 @@
             </table>
         </div>
     </div>
+
+    <!-- MODAL: VER FOTO ORIGINAL DE UN COMPROBANTE -->
+    <div class="modal-overlay" id="modal-imagen-comprobante" onclick="if(event.target===this) cerrarModalImagenComprobante()">
+        <div class="modal-box">
+            <span class="modal-cerrar" onclick="cerrarModalImagenComprobante()">&times;</span>
+            <h3 id="titulo-modal-imagen">Comprobante</h3>
+            <div id="contenido-modal-imagen"></div>
+        </div>
+    </div>
     <script type="module">
         // Este bloque separado (type="module") es el único lugar donde se puede usar
         // "import" en HTML plano. Solo trae la función upload() de Vercel Blob desde un
@@ -261,6 +274,11 @@
         // volvió a cargar), para poder incluirla si el usuario presiona "Guardar Cuadre".
         // null si todavía no se hizo/cargó ninguna auditoría IA para el cuadre actual.
         let ultimaAuditoriaIA = null;
+        // Si no es null, "💾 Guardar Cuadre" está en MODO EDICIÓN: en vez de crear un cuadre
+        // guardado nuevo (POST), actualiza este id existente (PUT /api/cuadres/{id}). Se activa
+        // al presionar "Editar" en la lista de "📂 Cuadres Guardados" y se apaga al guardar los
+        // cambios, cancelar la edición, o salir a datos en vivo.
+        let cuadreEditandoId = null;
         const formatoVE = new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         function parseNum(str) {
             if (!str) return 0;
@@ -529,10 +547,18 @@
                         resumen = ` (cierre de lote${detalleLote})`;
                     }
                     const prefijoMonto = comp.tipo === "Cashea" ? "$" : "";
+                    // "archivo_url" se le pega en el propio navegador (ver subirComprobantes) a
+                    // partir de la URL pública de Vercel Blob que ya devolvió la subida directa
+                    // -- sin tocar auditar.py ni blob-upload-token.js. Permite verificar de un
+                    // vistazo si la IA leyó bien el comprobante.
+                    const celdaFoto = comp.archivo_url
+                        ? `<button class="btn-mini btn-ver-foto" onclick="verFotoComprobante('${comp.archivo_url.replace(/'/g, "\\'")}', '${String(comp.archivo || '').replace(/'/g, "\\'")}')">🔍 Ver</button>`
+                        : `<span style="color:#aaa;">-</span>`;
                     tr.innerHTML = `
                         <td style="padding: 8px; border: 1px solid #ccc; text-align: left;">${(comp.archivo || comp.referencia || '-')}${resumen}</td>
                         <td style="padding: 8px; border: 1px solid #ccc; text-align: center;">${comp.tipo || '-'}</td>
                         <td style="padding: 8px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${(comp.monto !== undefined && comp.monto !== null) ? prefijoMonto + formatoVE.format(comp.monto) : '-'}</td>
+                        <td style="padding: 8px; border: 1px solid #ccc; text-align: center;">${celdaFoto}</td>
                     `;
                     tbodyAuditoria.appendChild(tr);
                 });
@@ -544,9 +570,29 @@
                     <td style="padding: 8px; border: 1px solid #ccc; text-align: left;">${nombreArchivo}</td>
                     <td style="padding: 8px; border: 1px solid #ccc; text-align: center; color:#c77700; font-weight:bold;">⚠️ NO ANALIZADO POR LA IA</td>
                     <td style="padding: 8px; border: 1px solid #ccc; text-align: right;">-</td>
+                    <td style="padding: 8px; border: 1px solid #ccc; text-align: center;">-</td>
                 `;
                 tbodyAuditoria.appendChild(tr);
             });
+        }
+        function verFotoComprobante(url, nombreArchivo) {
+            // Abre el modal con la foto en Vercel Blob (imagen o PDF) para verificar visualmente
+            // si la IA la leyó bien. Los PDF no se pueden pintar dentro de un <img>, así que para
+            // esos se muestra un enlace para abrirlo en una pestaña nueva.
+            const esPdf = /\.pdf($|\?)/i.test(url) || /\.pdf$/i.test(nombreArchivo || "");
+            document.getElementById('titulo-modal-imagen').textContent = nombreArchivo || 'Comprobante';
+            const contenedor = document.getElementById('contenido-modal-imagen');
+            if (esPdf) {
+                contenedor.innerHTML = `<p>Este comprobante es un PDF y no se puede mostrar aquí directamente.</p>
+                    <a href="${url}" target="_blank" rel="noopener">Abrir el PDF en una pestaña nueva</a>`;
+            } else {
+                contenedor.innerHTML = `<img src="${url}" alt="${nombreArchivo || 'Comprobante'}" style="max-width:100%; max-height:75vh; display:block; margin:0 auto;">`;
+            }
+            document.getElementById('modal-imagen-comprobante').classList.add('abierto');
+        }
+        function cerrarModalImagenComprobante() {
+            document.getElementById('modal-imagen-comprobante').classList.remove('abierto');
+            document.getElementById('contenido-modal-imagen').innerHTML = "";
         }
         async function subirComprobantes() {
             const input = document.getElementById('comprobantes');
@@ -680,6 +726,24 @@
             try {
                 if (result.status === "success") {
                     const datosIA = result.data || {};
+
+                    // Le pegamos la URL pública de Vercel Blob a cada comprobante que la IA
+                    // clasificó, para el botón "🔍 Ver" -- SIN pasar por auditar.py (que no la
+                    // devuelve). Ya la teníamos en "archivosSubidos" desde el paso 2 de arriba
+                    // (la subida directa a Blob), así que solo hace falta emparejar por nombre
+                    // de archivo. Si un mismo archivo generó dos comprobantes (ej. dos reportes
+                    // de cierre apilados en una sola foto, CASO ESPECIAL 3), ambos quedan
+                    // apuntando a la misma foto -- es lo correcto, salieron de la misma imagen.
+                    const urlPorNombreArchivo = {};
+                    archivosSubidos.forEach(a => { urlPorNombreArchivo[a.nombre] = a.url; });
+                    if (Array.isArray(datosIA.comprobantes_leidos)) {
+                        datosIA.comprobantes_leidos.forEach(comp => {
+                            if (comp && urlPorNombreArchivo[comp.archivo]) {
+                                comp.archivo_url = urlPorNombreArchivo[comp.archivo];
+                            }
+                        });
+                    }
+
                     const faltantes = Array.isArray(datosIA.archivos_no_analizados) ? datosIA.archivos_no_analizados : [];
 
                     if (faltantes.length > 0) {
@@ -745,18 +809,31 @@
                 cajas, totales_sistema: totalesSistema, auditoria: ultimaAuditoriaIA, notas,
             };
 
+            // Si se llegó acá desde "Editar" en la lista de cuadres guardados, se actualiza ese
+            // mismo id (PUT) en vez de crear uno nuevo (POST) -- así "Guardar Cuadre"/"Guardar
+            // Cambios" es un solo botón/función tanto para guardar por primera vez como para
+            // editar uno ya guardado.
+            const editando = cuadreEditandoId !== null;
+            const url = editando ? `/api/cuadres/${cuadreEditandoId}` : '/api/cuadres';
+            const metodo = editando ? 'PUT' : 'POST';
+
             try {
-                const response = await fetch('/api/cuadres', {
-                    method: 'POST',
+                const response = await fetch(url, {
+                    method: metodo,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(cuerpo),
                 });
                 const result = await response.json();
                 if (result.status === "success") {
-                    alert(`✅ Cuadre guardado (fecha ${fecha}${serie ? ', serie ' + serie : ''}) — estado: ${result.estado}.\nYa puedes consultarlo en "📂 Cuadres Guardados".`);
-                    document.getElementById('notas-cuadre').value = "";
+                    if (editando) {
+                        alert(`✅ Cambios guardados en el cuadre del ${fecha}${serie ? ', serie ' + serie : ''} — estado: ${result.estado}.`);
+                        salirModoEdicionCuadre();
+                    } else {
+                        alert(`✅ Cuadre guardado (fecha ${fecha}${serie ? ', serie ' + serie : ''}) — estado: ${result.estado}.\nYa puedes consultarlo en "📂 Cuadres Guardados".`);
+                        document.getElementById('notas-cuadre').value = "";
+                    }
                 } else {
-                    alert("❌ No se pudo guardar el cuadre: " + (result.message || "error desconocido"));
+                    alert(`❌ No se pudo ${editando ? 'guardar los cambios del' : 'guardar el'} cuadre: ` + (result.message || "error desconocido"));
                 }
             } catch (error) {
                 console.error("Error guardando el cuadre:", error);
@@ -802,6 +879,7 @@
                         <td>${c.fecha_guardado || '-'}</td>
                         <td>
                             <button class="btn-mini btn-cargar" onclick="cargarCuadreGuardado(${c.id})">Cargar</button>
+                            <button class="btn-mini btn-editar" onclick="editarCuadreGuardado(${c.id})">Editar</button>
                             <button class="btn-mini btn-eliminar" onclick="eliminarCuadreGuardado(${c.id})">Eliminar</button>
                         </td>
                     `;
@@ -826,6 +904,11 @@
                     return;
                 }
                 const c = data.cuadre;
+
+                // Por si se venía de una edición sin guardar/cancelar: "Cargar" siempre vuelve a
+                // modo solo-lectura, nunca deja el botón en "Guardar Cambios" apuntando a otro id.
+                cuadreEditandoId = null;
+                document.getElementById('btn-guardar-cuadre').textContent = "💾 Guardar Cuadre";
 
                 document.getElementById('filtro-fecha').value = c.fecha || '';
                 document.getElementById('filtro-serie').value = c.serie || '';
@@ -879,6 +962,94 @@
             banner.innerHTML = "";
             document.getElementById('contenedor-auditoria').style.display = "none";
             ultimaAuditoriaIA = null;
+            cuadreEditandoId = null;
+            restaurarBotonGuardar();
+            cargarVendedores();
+            cargarDatosSistema();
+        }
+
+        function restaurarBotonGuardar() {
+            const inputTasa = document.getElementById('tasa');
+            inputTasa.readOnly = false;
+            inputTasa.style.backgroundColor = "";
+            const btn = document.getElementById('btn-guardar-cuadre');
+            btn.textContent = "💾 Guardar Cuadre";
+        }
+
+        async function editarCuadreGuardado(id) {
+            // Igual que cargarCuadreGuardado (pinta los valores guardados en pantalla), pero deja
+            // la tasa EDITABLE y activa el "modo edición": el botón "Guardar Cuadre" pasa a
+            // "Guardar Cambios" y, al presionarlo, guardarCuadreActual() hace PUT sobre este mismo
+            // id (actualiza la fila) en vez de crear un cuadre guardado nuevo con POST.
+            try {
+                const response = await fetch(`/api/cuadres/${id}`);
+                const data = await response.json();
+                if (data.status !== "success") {
+                    alert("No se pudo cargar ese cuadre para editar: " + (data.message || "error desconocido"));
+                    return;
+                }
+                const c = data.cuadre;
+
+                document.getElementById('filtro-fecha').value = c.fecha || '';
+                document.getElementById('filtro-serie').value = c.serie || '';
+                document.getElementById('filtro-hora-desde').value = c.hora_desde || '';
+                document.getElementById('filtro-hora-hasta').value = c.hora_hasta || '';
+
+                const inputTasa = document.getElementById('tasa');
+                inputTasa.value = formatoVE.format(c.tasa || 0);
+                inputTasa.readOnly = false;
+                inputTasa.style.backgroundColor = "";
+
+                document.getElementById('notas-cuadre').value = c.notas || "";
+
+                totalesSistema = c.totales_sistema || {};
+                conceptosVisibles.forEach(concepto => {
+                    const inputCaja = document.getElementById(`caja-${concepto}`);
+                    if (inputCaja && c.cajas && c.cajas[concepto] !== undefined) {
+                        inputCaja.value = c.cajas[concepto];
+                    }
+                    if (!concepto.includes("Fondo")) {
+                        const montoSistema = totalesSistema[concepto] || 0;
+                        const elVentas = document.getElementById(`ventas-${concepto}`);
+                        if (elVentas) elVentas.textContent = formatoVE.format(montoSistema);
+                    }
+                });
+                calcularCuadre();
+
+                ultimaAuditoriaIA = c.auditoria || null;
+                if (c.auditoria) {
+                    pintarAuditoria(c.auditoria, `📂 Auditoría IA guardada junto con este cuadre (guardado el ${c.fecha_guardado}).`);
+                } else {
+                    document.getElementById('contenedor-auditoria').style.display = "none";
+                }
+
+                cuadreEditandoId = id;
+                document.getElementById('btn-guardar-cuadre').textContent = "💾 Guardar Cambios";
+
+                const banner = document.getElementById('banner-modo-guardado');
+                banner.style.display = "block";
+                banner.innerHTML =
+                    `✏️ Estás <strong>EDITANDO</strong> el cuadre guardado del <strong>${c.fecha}</strong>` +
+                    `${c.serie ? ' (serie ' + c.serie + ')' : ''} — guardado el ${c.fecha_guardado}` +
+                    `${c.fecha_actualizado ? ' (editado por última vez el ' + c.fecha_actualizado + ')' : ''}. ` +
+                    `Modifica los valores que necesites y presiona "💾 Guardar Cambios" arriba. ` +
+                    `<button class="btn-mini btn-cancelar-edicion" onclick="salirModoEdicionCuadre()">Cancelar edición</button>`;
+
+                cerrarModalCuadres();
+            } catch (error) {
+                console.error("Error cargando el cuadre guardado para editar:", error);
+                alert("Error de conexión al cargar el cuadre guardado para editar.");
+            }
+        }
+
+        function salirModoEdicionCuadre() {
+            const banner = document.getElementById('banner-modo-guardado');
+            banner.style.display = "none";
+            banner.innerHTML = "";
+            document.getElementById('contenedor-auditoria').style.display = "none";
+            ultimaAuditoriaIA = null;
+            cuadreEditandoId = null;
+            restaurarBotonGuardar();
             cargarVendedores();
             cargarDatosSistema();
         }
