@@ -25,21 +25,23 @@
 // antes del POST real. Sin estos encabezados, esa verificación falla, el
 // navegador NUNCA llega a mandar el POST, y la subida se queda esperando una
 // respuesta que no va a llegar -- sin ningún error visible, solo "colgada".
+//
+// RUNTIME -- por qué NO usar "edge" y por qué NO usar "export default":
+// handleUpload() de @vercel/blob/client depende de módulos nativos de Node
+// (stream, crypto, net, etc.) que Edge Runtime no soporta -- con
+// "runtime: 'edge'" el build falla directamente ("referencing unsupported
+// modules"). Pero tampoco alcanza con quitar esa línea y dejar
+// "export default function handler(request) {...}": en runtime Node.js
+// normal, un "export default" se trata como función CLÁSICA (req, res) --
+// donde hay que llamar a res.end()/res.json() explícitamente -- así que un
+// "return new Response(...)" se descarta en silencio y la petición se queda
+// colgada hasta el timeout. La forma correcta de usar el estilo Request/
+// Response en runtime Node.js normal es con EXPORTS NOMBRADOS por método
+// HTTP (export async function POST(request) {...}), que sí es totalmente
+// compatible con handleUpload() -- y ya tenemos "type": "module" en
+// package.json, el único requisito adicional para que esto funcione.
 
 import { handleUpload } from '@vercel/blob/client';
-
-// Sin esto, Vercel trata este archivo como una función Node.js "clásica"
-// (estilo (req, res), donde hay que llamar a res.end() explícitamente) en vez
-// de una Edge Function (estilo Web/Fetch: recibe un Request y se espera que
-// el handler DEVUELVA un Response). Nuestro código está escrito en el segundo
-// estilo (return new Response(...)) -- sin "runtime: 'edge'" aquí, ese valor
-// de retorno se descarta silenciosamente, la respuesta HTTP real nunca se
-// envía, y la petición se queda colgada hasta que Vercel la corta con
-// "FUNCTION_INVOCATION_TIMEOUT" a los 30s. Con esta línea, Vercel ejecuta el
-// archivo como Edge Function y sí usa lo que el handler devuelve.
-export const config = {
-  runtime: 'edge',
-};
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -47,21 +49,13 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-export default async function handler(request) {
-  // Responde la verificación (preflight) del navegador ANTES que nada, sin
-  // intentar leer el cuerpo ni validar nada más -- el preflight nunca trae
-  // el cuerpo real, solo pregunta si el POST que sigue está permitido.
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
-  }
+// Responde la verificación (preflight) que manda el navegador antes del
+// POST real, ya que esta llamada es "cross-origin" (ver nota CORS arriba).
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
 
-  if (request.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
-    });
-  }
-
+export async function POST(request) {
   const body = await request.json();
 
   try {
