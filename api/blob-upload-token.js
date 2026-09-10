@@ -28,6 +28,19 @@
 
 import { handleUpload } from '@vercel/blob/client';
 
+// Sin esto, Vercel trata este archivo como una función Node.js "clásica"
+// (estilo (req, res), donde hay que llamar a res.end() explícitamente) en vez
+// de una Edge Function (estilo Web/Fetch: recibe un Request y se espera que
+// el handler DEVUELVA un Response). Nuestro código está escrito en el segundo
+// estilo (return new Response(...)) -- sin "runtime: 'edge'" aquí, ese valor
+// de retorno se descarta silenciosamente, la respuesta HTTP real nunca se
+// envía, y la petición se queda colgada hasta que Vercel la corta con
+// "FUNCTION_INVOCATION_TIMEOUT" a los 30s. Con esta línea, Vercel ejecuta el
+// archivo como Edge Function y sí usa lo que el handler devuelve.
+export const config = {
+  runtime: 'edge',
+};
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
