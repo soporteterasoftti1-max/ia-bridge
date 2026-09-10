@@ -14,6 +14,21 @@ El endpoint real que llama el frontend sigue siendo /api/auditar -- eso lo
 define la propia ruta de FastAPI más abajo (@app.post("/api/auditar", ...)),
 no el nombre de este archivo. El nombre del archivo solo le dice a Vercel
 CUÁL app cargar; las rutas de adentro son las que de verdad importan.
+LÍMITE DE TAMAÑO -- por qué el frontend manda "lotes" en vez de todo junto:
+las funciones de Vercel rechazan peticiones de más de ~4.5 MB
+(FUNCTION_PAYLOAD_TOO_LARGE). Se intentó primero subir cada foto DIRECTO a
+Vercel Blob para evitar ese límite (subida "client upload"), pero ese
+protocolo de subida es interno y no está documentado públicamente -- tras
+varios intentos fallidos reconstruyéndolo a mano, se abandonó. En su lugar,
+index.html divide los comprobantes en lotes que SÍ caben bajo el límite y
+llama a /api/auditar una vez POR LOTE (el usuario solo ve "Lote X de Y...",
+nunca tiene que elegir los lotes a mano). Cada lote se clasifica con Claude
+por separado, así que la "reconciliación" que devuelve CADA llamada a
+/api/auditar es solo la de ESE lote -- el frontend combina los
+"comprobantes_leidos" de todos los lotes y llama a /api/reconciliar (ver más
+abajo) UNA sola vez con la lista completa para obtener el resultado final
+correcto (comparar una suma parcial contra el total completo del sistema
+daría descuadres falsos).
 IMPORTANTE -- por qué este archivo es autocontenido (sin imports propios):
 Vercel empaqueta cada función de /api/ por separado y, en pruebas, no
 siempre incluye módulos hermanos (ej. audit_prompt.py) en el mismo paquete,
@@ -23,12 +38,13 @@ librería instalada (fastapi, anthropic, etc.) -- el prompt completo del
 auditor se arma como un f-string DENTRO de la función que lo usa (no como
 una constante de módulo aparte), para que no pueda volver a desincronizarse
 del código que lo rellena -- ver la nota junto a "prompt_auditor" más abajo.
-Qué hace este servicio: recibe los comprobantes (imágenes/PDF) más los
-totales del sistema ya calculados por el frontend, llama a la API de Claude
-para clasificarlos, calcula la reconciliación determinística en Python
-(igual que en el main.py original de la app de escritorio/Render) y
-devuelve el JSON de resultado. El resto de la app (dashboard, sync ODBC con
-A2, SQLite) NO vive aquí -- sigue corriendo donde ya estaba.
+Qué hace este servicio: recibe los comprobantes (imágenes/PDF) de UN lote más
+los totales del sistema ya calculados por el frontend, llama a la API de
+Claude para clasificarlos, calcula la reconciliación determinística en
+Python para ESE lote (igual que en el main.py original de la app de
+escritorio/Render) y devuelve el JSON de resultado. El resto de la app
+(dashboard, sync ODBC con A2, SQLite) NO vive aquí -- sigue corriendo donde
+ya estaba.
 SEGURIDAD:
 - La API key de Anthropic NUNCA va en el código -- se lee de la variable de
   entorno ANTHROPIC_API_KEY (Vercel Dashboard -> Environment Variables).
@@ -39,13 +55,11 @@ SEGURIDAD:
 import base64
 import json
 import logging
-import mimetypes
 import os
 import traceback
+from typing import List
 import anthropic
-import httpx
-from vercel_storage import blob
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 # ---------------------------------------------------------------------------
 # Logging: Vercel captura stdout/stderr automáticamente y lo muestra en la
@@ -88,23 +102,6 @@ def verificar_secreto(x_audit_secret: str = Header(default="")) -> None:
         return
     if x_audit_secret != AUDIT_SHARED_SECRET:
         raise HTTPException(status_code=401, detail="Header X-Audit-Secret ausente o incorrecto.")
-def _borrar_blobs_best_effort(urls):
-    """Borra los blobs de Vercel Blob usados en esta auditoría -- ya no se
-    necesitan después (ni el navegador ni este servidor los vuelven a leer
-    una vez que Claude terminó de leerlos). Es "best effort" a propósito:
-    si el borrado falla (ej. la API de Vercel Blob no responde, o el token
-    BLOB_READ_WRITE_TOKEN no está configurado), solo se registra en el log
-    -- nunca se le muestra un error al usuario por esto, porque la auditoría
-    en sí (éxito o fracaso) ya se decidió antes de llegar aquí. Dejar blobs
-    sueltos sin borrar no es grave (se acumulan en el Blob Store, pero no
-    rompen nada) -- por eso esto nunca debe poder tumbar la respuesta real."""
-    urls_validas = [u for u in (urls or []) if u]
-    if not urls_validas:
-        return
-    try:
-        blob.delete(urls_validas)
-    except Exception as e:
-        logger.warning("No se pudieron borrar %d blob(s) tras la auditoría (no es grave): %s", len(urls_validas), e)
 # ---------------------------------------------------------------------------
 # Reconciliación determinística (idéntica a la del main.py original) — NO
 # confiar en la suma que redacta la IA como fuente de verdad para los
@@ -390,60 +387,38 @@ HERRAMIENTA_AUDITORIA = {
 def salud():
     """Health check simple."""
     return {"status": "ok", "servicio": "auditoria-ia"}
-async def _auditar_comprobantes_impl(archivos: list, totales_json: str):
-    """`archivos` ya NO son bytes subidos directo a esta función (eso chocaba
-    con el límite de ~4.5 MB por petición de las funciones de Vercel) -- son
-    una lista de dicts {"nombre": ..., "url": ..., "content_type": ...} que
-    el navegador subió DIRECTO a Vercel Blob antes de llamar a este endpoint
-    (ver index.html y api/blob-upload-token.js). Este servidor descarga cada
-    URL, arma el mensaje para Claude igual que antes, y al final (éxito o
-    fracaso) borra esos blobs -- ya cumplieron su función."""
+async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: str):
+    """Recibe los archivos de UN LOTE (ver nota sobre límite de tamaño al
+    inicio del archivo) directo como multipart/form-data -- igual que en el
+    main.py original de escritorio. index.html se encarga de dividir la
+    selección completa del usuario en lotes que quepan bajo el límite de
+    ~4.5 MB antes de llamar aquí, y de combinar los resultados de todos los
+    lotes después."""
     logger.info("Recibida solicitud /api/auditar con %d archivo(s)", len(archivos))
-    urls_a_borrar = [a.get("url") for a in archivos if isinstance(a, dict) and a.get("url")]
     try:
         content_blocks = []
         archivos_procesados = []
-        async with httpx.AsyncClient(timeout=60.0) as cliente_http:
-            for indice, item in enumerate(archivos, start=1):
-                if not isinstance(item, dict):
-                    continue
-                nombre = str(item.get("nombre") or f"archivo_{indice}")
-                url = item.get("url")
-                if not url:
-                    logger.warning("Elemento #%d sin 'url', se omite: %s", indice, item)
-                    continue
-                try:
-                    resp = await cliente_http.get(url)
-                    resp.raise_for_status()
-                    contenido_bytes = resp.content
-                except Exception as e_descarga:
-                    logger.error("No se pudo descargar el comprobante '%s' desde Blob (%s): %s", nombre, url, e_descarga)
-                    continue
-                # Preferimos el content_type que mandó el navegador (viene del propio
-                # File del input, siempre confiable); si no vino, usamos el header de
-                # la respuesta de Blob, y como último recurso adivinamos por la extensión
-                # del nombre de archivo.
-                mime_type = (item.get("content_type") or resp.headers.get("content-type") or "").split(";")[0].strip()
-                if not mime_type:
-                    mime_type = mimetypes.guess_type(nombre)[0] or ""
-                if mime_type.startswith("image/"):
-                    tipo_bloque = "image"
-                elif mime_type == "application/pdf":
-                    tipo_bloque = "document"
-                else:
-                    continue
-                base64_encoded = base64.b64encode(contenido_bytes).decode("utf-8")
-                content_blocks.append({
-                    "type": "text",
-                    "text": f'--- Archivo #{indice} de {len(archivos)}: nombre exacto = "{nombre}" ---'
-                })
-                content_blocks.append({
-                    "type": tipo_bloque,
-                    "source": {"type": "base64", "media_type": mime_type, "data": base64_encoded}
-                })
-                archivos_procesados.append(nombre)
+        for indice, archivo in enumerate(archivos, start=1):
+            contenido_bytes = await archivo.read()
+            base64_encoded = base64.b64encode(contenido_bytes).decode("utf-8")
+            mime_type = archivo.content_type
+            if mime_type.startswith("image/"):
+                tipo_bloque = "image"
+            elif mime_type == "application/pdf":
+                tipo_bloque = "document"
+            else:
+                continue
+            content_blocks.append({
+                "type": "text",
+                "text": f'--- Archivo #{indice} de {len(archivos)}: nombre exacto = "{archivo.filename}" ---'
+            })
+            content_blocks.append({
+                "type": tipo_bloque,
+                "source": {"type": "base64", "media_type": mime_type, "data": base64_encoded}
+            })
+            archivos_procesados.append(archivo.filename)
         if not content_blocks:
-            return {"status": "error", "message": "No se encontraron formatos de imagen o PDF válidos (o no se pudieron descargar desde Vercel Blob)."}
+            return {"status": "error", "message": "No se encontraron formatos de imagen o PDF válidos."}
 
         # NOTA sobre este cambio: el prompt se arma como f-string AQUÍ MISMO (no como
         # una constante de módulo aparte + .format()/.replace()). Así, "{len(archivos)}"
@@ -856,29 +831,49 @@ async def _auditar_comprobantes_impl(archivos: list, totales_json: str):
     except Exception as e:
         logger.error("Excepción no controlada en /api/auditar: %s\n%s", e, traceback.format_exc())
         return {"status": "error", "message": str(e)}
-    finally:
-        # Pase lo que pase arriba (éxito, error, excepción) los blobs ya
-        # cumplieron su función -- se borran siempre, en un solo lote.
-        _borrar_blobs_best_effort(urls_a_borrar)
 # Se registran DOS rutas para el mismo handler ("/api/auditar" y "/") a
 # propósito: en el modo "función por archivo" de Vercel no siempre está claro
-# si el prefijo de carpeta (api/auditar.py -> /api/auditar) llega ya recortado
+# si el prefijo de carpeta (api/index.py -> /api/auditar) llega ya recortado
 # a la app de FastAPI o no. Registrando ambas, el endpoint funciona sin
 # importar cuál de los dos casos aplique en tu proyecto -- puedes borrar la
 # que no uses una vez confirmes cuál responde.
 @app.post("/api/auditar", dependencies=[Depends(verificar_secreto)])
-async def auditar_comprobantes(request: Request):
-    # El cuerpo ahora es JSON (no multipart/form-data): {"archivos": [{"nombre",
-    # "url", "content_type"}, ...], "totales_json": "..."} -- ver index.html,
-    # que sube cada foto DIRECTO a Vercel Blob antes de llamar aquí, y por eso
-    # este cuerpo pesa poco (son solo URLs cortas, no los bytes de las fotos).
-    cuerpo = await request.json()
-    archivos = cuerpo.get("archivos") or []
-    totales_json = cuerpo.get("totales_json") or "{}"
+async def auditar_comprobantes(
+    archivos: List[UploadFile] = File(...),
+    totales_json: str = Form(...),
+):
     return await _auditar_comprobantes_impl(archivos, totales_json)
 @app.post("/", dependencies=[Depends(verificar_secreto)])
-async def auditar_comprobantes_raiz(request: Request):
-    cuerpo = await request.json()
-    archivos = cuerpo.get("archivos") or []
-    totales_json = cuerpo.get("totales_json") or "{}"
+async def auditar_comprobantes_raiz(
+    archivos: List[UploadFile] = File(...),
+    totales_json: str = Form(...),
+):
     return await _auditar_comprobantes_impl(archivos, totales_json)
+
+# ---------------------------------------------------------------------------
+# /api/reconciliar -- combina los resultados de TODOS los lotes en una sola
+# reconciliación final. Necesario porque cada lote se audita por separado
+# (ver nota de "LÍMITE DE TAMAÑO" al inicio del archivo): la reconciliación
+# que devuelve /api/auditar para un lote individual solo tiene sentido para
+# ESE lote -- compararla contra el total del sistema (que es del DÍA
+# completo) mostraría un "descuadre" falso mientras falten lotes por
+# procesar. index.html junta los "comprobantes_leidos" de todos los lotes
+# ya auditados y llama aquí UNA sola vez al final con la lista completa.
+# No llama a Claude -- es puro cálculo Python, así que es rápido y el cuerpo
+# de la petición es liviano (nada de imágenes, solo texto/JSON).
+# ---------------------------------------------------------------------------
+@app.post("/api/reconciliar", dependencies=[Depends(verificar_secreto)])
+async def reconciliar_comprobantes(request: Request):
+    try:
+        cuerpo = await request.json()
+        comprobantes_leidos = cuerpo.get("comprobantes_leidos") or []
+        totales_json = cuerpo.get("totales_json") or "{}"
+        reconciliacion = calcular_reconciliacion(comprobantes_leidos, totales_json)
+        logger.info("Reconciliación FINAL combinada (Python): %s", reconciliacion)
+        return {"status": "success", "reconciliacion_calculada": reconciliacion}
+    except Exception as e:
+        logger.error("Excepción no controlada en /api/reconciliar: %s\n%s", e, traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+@app.post("/reconciliar", dependencies=[Depends(verificar_secreto)])
+async def reconciliar_comprobantes_alt(request: Request):
+    return await reconciliar_comprobantes(request)
