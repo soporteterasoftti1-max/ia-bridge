@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/auditar.py": { "maxDuration": 300 }
+    "api/index.py": { "maxDuration": 300 }
   }
 }
 
