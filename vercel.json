@@ -1,15 +1,6 @@
 {
-  "builds": [
-    {
-      "src": "api/auditar.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "api/auditar.py"
-    }
-  ]
+  "functions": {
+    "api/auditar.py": { "maxDuration": 300 }
+  }
 }
 
