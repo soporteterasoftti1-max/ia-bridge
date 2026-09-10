@@ -5,6 +5,6 @@
   "description": "Función Node.js que genera tokens de subida directa a Vercel Blob para la Auditoría IA.",
   "type": "module",
   "dependencies": {
-    "@vercel/blob": "^2.7.0"
+    "@vercel/blob": "2.7.0"
   }
 }
