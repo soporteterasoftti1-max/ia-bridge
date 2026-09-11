@@ -872,11 +872,11 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              billetes pueden estar boca abajo, al revés, o parcialmente tapados por otro billete de la pila;
              identifícalos igual por el número impreso que sí se alcance a ver, sin importar la orientación.
            - Agrupa por denominación: cuenta cuántos billetes hay de cada valor, para cada moneda por
-             separado, y repórtalo en "billetes_usd" y "billetes_bs" (arreglos de {"denominacion":
-             N, "cantidad": N}). Ej. si ves 3 billetes de $20, 2 de $5, y 10 de $1: billetes_usd =
-             [{"denominacion": 20, "cantidad": 3}, {"denominacion": 5, "cantidad": 2}, {"denominacion": 1,
-             "cantidad": 10}]. Si la foto solo tiene billetes de una moneda, deja el arreglo de la otra
-             moneda vacío ([]).
+             separado, y repórtalo en "billetes_usd" y "billetes_bs" (arreglos de objetos con
+             "denominacion" y "cantidad"). Ej. si ves 3 billetes de $20, 2 de $5, y 10 de $1, en
+             "billetes_usd" van tres elementos: uno con denominacion=20 y cantidad=3, otro con
+             denominacion=5 y cantidad=2, y otro con denominacion=1 y cantidad=10. Si la foto solo
+             tiene billetes de una moneda, deja el arreglo de la otra moneda vacío.
            - Un mismo billete NUNCA se cuenta dos veces, incluso si aparece parcialmente detrás de otro en la
              pila o abanico de billetes -- cuenta cada billete físico UNA sola vez. Si genuinamente no puedes
              distinguir cuántos billetes hay en una pila muy gruesa (no se ven los bordes individuales), cuenta
