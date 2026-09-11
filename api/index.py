@@ -909,6 +909,14 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              pila o abanico de billetes -- cuenta cada billete físico UNA sola vez. Si genuinamente no puedes
              distinguir cuántos billetes hay en una pila muy gruesa (no se ven los bordes individuales), cuenta
              los que sí puedas distinguir con confianza y no inventes una cantidad para el resto.
+           - ⚠️ ERROR REAL YA OBSERVADO -- sobreconteo en un abanico/pila de billetes superpuestos: en una
+             pila de varios billetes de la MISMA denominación extendidos en abanico (donde cada billete tapa
+             parcialmente al siguiente, dejando ver solo un borde delgado de cada uno), ya se ha contado de
+             más -- ej. contar 16 cuando en realidad había 12. Para este patrón específico, cuenta los BORDES
+             o ESQUINAS distintos y separables que alcances a ver con claridad (cada borde visible = un
+             billete), NO el ancho total aparente de la pila ni una impresión general de "se ve como muchos".
+             Si dos bordes están tan pegados que no puedes asegurar si son uno o dos billetes distintos,
+             cuenta el más conservador de los dos números posibles antes que sobreestimar.
            - ⚠️ ERROR REAL YA OBSERVADO: se ha visto describir los billetes correctamente en el texto de
              "análisis_detallado" (ej. "3 billetes de $20, 2 de $5, 16 de $1") pero dejar "billetes_usd" y
              "billetes_bs" VACÍOS en el elemento de "comprobantes_leidos" -- son dos lugares DISTINTOS de tu
