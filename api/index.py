@@ -199,6 +199,66 @@ def _corregir_tipos_por_destino(items):
             })
             item["tipo"] = tipo_correcto
     return correcciones
+def _detectar_reportes_faltantes(items):
+    """Agrupa los elementos de "Cierre de Lote / Reporte de Cierre" por archivo, y compara
+    cuántos hay contra lo que la propia IA declaró en "reportes_en_esta_foto" (ver CASO ESPECIAL
+    3 del prompt). Si hay menos elementos de los que la IA misma contó, es señal fuerte de que se
+    le olvidó transcribir un reporte que sí notó en la foto -- no se puede inventar el dato
+    faltante, así que solo se expone como advertencia para revisar esa foto a mano."""
+    por_archivo = {}
+    for item in items:
+        if item.get("tipo") != "Cierre de Lote / Reporte de Cierre":
+            continue
+        archivo = item.get("archivo") or "(sin nombre)"
+        por_archivo.setdefault(archivo, []).append(item)
+    advertencias = []
+    for archivo, elementos in por_archivo.items():
+        conteos_declarados = [int(_num(e.get("reportes_en_esta_foto"))) for e in elementos if e.get("reportes_en_esta_foto")]
+        conteo_declarado = max(conteos_declarados) if conteos_declarados else 0
+        if conteo_declarado > len(elementos):
+            advertencias.append({
+                "archivo": archivo,
+                "reportes_declarados_por_ia": conteo_declarado,
+                "elementos_transcritos": len(elementos),
+                "mensaje": (
+                    f'La IA contó {conteo_declarado} reporte(s) de cierre en "{archivo}", pero solo '
+                    f"transcribió {len(elementos)}. Probablemente falta un monto de tarjeta en el "
+                    f"cuadre -- revisa esta foto a mano."
+                ),
+            })
+    return advertencias
+def _detectar_discrepancias_monto_tarjeta(items):
+    """Para cada Cierre de Lote, compara "monto" (la cifra general que reportó la IA) contra la
+    suma de sus propios campos detallados (total_fila_credito + total_fila_debito +
+    total_fila_mc_visa_debit + total_fila_extrafin) -- que es lo que realmente se usa para la
+    reconciliación (ver el bucle de arriba). Si difieren en más de Bs. 1, la IA transcribió dos
+    cosas inconsistentes para el mismo comprobante -- no hay forma confiable de saber cuál de las
+    dos está bien sin ver la foto, así que no se auto-corrige nada, solo se expone."""
+    advertencias = []
+    for item in items:
+        if item.get("tipo") != "Cierre de Lote / Reporte de Cierre":
+            continue
+        monto_general = _num(item.get("monto"))
+        suma_detallada = (
+            _num(item.get("total_fila_credito"))
+            + _num(item.get("total_fila_debito"))
+            + _num(item.get("total_fila_mc_visa_debit"))
+            + _num(item.get("total_fila_extrafin"))
+        )
+        if abs(monto_general - suma_detallada) > 1.00:
+            advertencias.append({
+                "archivo": item.get("archivo"),
+                "monto_general_ia": round(monto_general, 2),
+                "suma_campos_detallados": round(suma_detallada, 2),
+                "mensaje": (
+                    f'En "{item.get("archivo")}", el monto general que dio la IA (Bs. '
+                    f"{formatear_monto_ve(monto_general)}) no coincide con la suma de sus propios "
+                    f"campos detallados de tarjeta (Bs. {formatear_monto_ve(suma_detallada)}). "
+                    f"Uno de los dos números está mal transcrito -- revisa esta foto a mano "
+                    f"(la reconciliación usa la suma de los campos detallados, no el monto general)."
+                ),
+            })
+    return advertencias
 def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     try:
         totales_sistema = json.loads(totales_json_str) if totales_json_str else {}
@@ -206,6 +266,7 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         totales_sistema = {}
     items = [i for i in (comprobantes_leidos or []) if isinstance(i, dict)]
     correcciones_destino = _corregir_tipos_por_destino(items)
+    advertencias_calidad = _detectar_reportes_faltantes(items) + _detectar_discrepancias_monto_tarjeta(items)
     terminales_cubiertos_por_lote = set()
     suma_lote_debito = 0.0
     suma_lote_credito = 0.0
@@ -384,6 +445,7 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         "total_general_comprobantes_calculado": round(total_general_comprobantes, 2),
         "veredicto_calculado": veredicto_calculado,
         "correcciones_destino": correcciones_destino,
+        "advertencias_calidad": advertencias_calidad,
     }
 # ---------------------------------------------------------------------------
 # Definición de la herramienta (tool use de Claude). Incluye "destino_telefono_o_cuenta"
@@ -854,10 +916,14 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
         b. Los "Cierre de Lote / Reporte de Cierre" (categoría 2) son resúmenes de terminal, no cobros nuevos
            — clasifícalos igual que cualquier otro comprobante, sin intentar verificar si "cuadran" con nada.
         c. "Otro" es el ÚLTIMO RECURSO: úsalo solo si la imagen está ilegible/borrosa o claramente NO es un
-           comprobante ni cierre de ningún medio de pago. Antes de usar "Otro", revisa si el documento encaja
-           en alguna de las categorías (1)-(5) de arriba, incluyendo el caso de plataformas no bancarias como
-           Cashea explicado en la categoría (2) — un panel de "Cierre de caja del día" de una app de pagos
-           SIEMPRE tiene una categoría correcta entre (1)-(5), nunca es "Otro".
+           comprobante ni cierre de ningún medio de pago. Antes de usar "Otro", revisa PRIMERO si el
+           documento tiene un número de teléfono de destino (ver "REGLA DE ORO" de la categoría 3 arriba) —
+           si lo tiene, es Pago Móvil, sin importar qué tan distinto o inusual se vea el diseño de la
+           pantalla (colores, apps de terceros como "SUICHE7B"/"Dinero Rápido", nombres de persona en vez de
+           bancos, etc.). Una pantalla de pago que no reconoces todavía NO es motivo para "Otro" -- revisa si
+           encaja en alguna de las categorías (1)-(5) de arriba, incluyendo el caso de plataformas no
+           bancarias como Cashea explicado en la categoría (2) — un panel de "Cierre de caja del día" de una
+           app de pagos SIEMPRE tiene una categoría correcta entre (1)-(5), nunca es "Otro".
         d. OBLIGATORIO: "comprobantes_leidos" debe tener AL MENOS {len(archivos)} elementos — como mínimo
            uno por cada archivo recibido (ver el total indicado en cada etiqueta "--- Archivo #N de TOTAL ---").
            No omitas ningún archivo. Si una imagen está borrosa, ilegible o no corresponde a ningún comprobante
