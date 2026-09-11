@@ -259,6 +259,44 @@ def _detectar_discrepancias_monto_tarjeta(items):
                 ),
             })
     return advertencias
+def _agregar_efectivo_fisico(items):
+    """Combina el desglose de billetes de TODOS los comprobantes de tipo 'Efectivo' (conteo de
+    billetes físicos) en un solo resumen: cuántos billetes hay de cada denominación -- Bs y USD
+    por separado -- y el total de cada moneda. A diferencia de las demás categorías, esto NO se
+    compara contra ningún total del sistema A2 -- es puramente un conteo de lo que hay
+    físicamente en caja, para que el usuario lo vea desglosado sin tener que contarlo a mano."""
+    desglose_bs = {}
+    desglose_usd = {}
+    for item in items:
+        if item.get("tipo") != "Efectivo":
+            continue
+        for billete in (item.get("billetes_bs") or []):
+            if not isinstance(billete, dict):
+                continue
+            denom = _num(billete.get("denominacion"))
+            cant = int(_num(billete.get("cantidad")))
+            if denom <= 0 or cant <= 0:
+                continue
+            desglose_bs[denom] = desglose_bs.get(denom, 0) + cant
+        for billete in (item.get("billetes_usd") or []):
+            if not isinstance(billete, dict):
+                continue
+            denom = _num(billete.get("denominacion"))
+            cant = int(_num(billete.get("cantidad")))
+            if denom <= 0 or cant <= 0:
+                continue
+            desglose_usd[denom] = desglose_usd.get(denom, 0) + cant
+    def _armar_lista(desglose):
+        return [
+            {"denominacion": denom, "cantidad": cant, "subtotal": round(denom * cant, 2)}
+            for denom, cant in sorted(desglose.items(), reverse=True)
+        ]
+    return {
+        "desglose_bs": _armar_lista(desglose_bs),
+        "desglose_usd": _armar_lista(desglose_usd),
+        "total_bs": round(sum(d["subtotal"] for d in _armar_lista(desglose_bs)), 2),
+        "total_usd": round(sum(d["subtotal"] for d in _armar_lista(desglose_usd)), 2),
+    }
 def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     try:
         totales_sistema = json.loads(totales_json_str) if totales_json_str else {}
@@ -464,6 +502,7 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         "veredicto_calculado": veredicto_calculado,
         "correcciones_destino": correcciones_destino,
         "advertencias_calidad": advertencias_calidad,
+        "efectivo_fisico": _agregar_efectivo_fisico(items),
     }
 # ---------------------------------------------------------------------------
 # Definición de la herramienta (tool use de Claude). Incluye "destino_telefono_o_cuenta"
@@ -550,6 +589,30 @@ HERRAMIENTA_AUDITORIA = {
                         "destino_telefono_o_cuenta": {
                             "type": "string",
                             "description": "Este campo va SIEMPRE presente en cada elemento (aunque sea con texto vacío \"\") porque el esquema lo exige, pero solo tiene contenido real cuando tipo = 'Pago Móvil' o 'Transferencia' -- para cualquier otro tipo (tarjeta, efectivo, Cashea, cierre de lote, etc.) déjalo como cadena vacía \"\". Cuando tipo SÍ es 'Pago Móvil' o 'Transferencia', llenarlo es OBLIGATORIO: copia TAL CUAL (solo los dígitos, y guiones si los tiene) el NÚMERO DE TELÉFONO o NÚMERO DE CUENTA BANCARIA del BENEFICIARIO/DESTINO del pago -- el campo que en el comprobante suele decir 'Beneficiario:', 'Destino:', 'Cuenta destino:', 'Número celular de destino:' o similar. ⚠️ NUNCA copies aquí una CÉDULA o RIF (campos como 'Identificación receptor:', 'C.I.:', 'RIF:') -- aunque el nombre de ese campo se parezca al nombre de este ('identificación' vs. 'destino_telefono_o_cuenta'), son cosas DISTINTAS: una cédula/RIF NUNCA va aquí, solo un TELÉFONO o una CUENTA. Tampoco copies el de 'Cuenta origen:'/'Número celular de origen:', ese es el pagador, no el destino. Esto es una transcripción de RESPALDO independiente de tu elección de 'tipo': el sistema usa este número para verificar automáticamente por su formato si es un teléfono (04XX-XXXXXXX, 11 dígitos) o una cuenta bancaria (código de banco de 4 dígitos que NO empieza en '04' + resto de la cuenta, hasta 20 dígitos, a veces parcialmente enmascarada con asteriscos) -- y corrige el tipo si no coincide con lo que elegiste. Por eso es más importante que nunca copiarlo bien, incluso si estás seguro de qué 'tipo' pusiste. Solo déjalo vacío en un elemento de tipo 'Pago Móvil'/'Transferencia' si el documento genuinamente no muestra ningún teléfono ni cuenta de destino en ningún lado de la imagen.",
+                        },
+                        "billetes_usd": {
+                            "type": "array",
+                            "description": "SOLO para tipo = 'Efectivo': lista de los billetes en DÓLARES que se ven en la foto, agrupados por denominación -- un elemento por cada valor distinto de billete presente, con cuántos hay de ese valor. Para cualquier otro tipo, deja un arreglo vacío ([]). Ver la categoría (5) del prompt para el detalle de cómo contar.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "denominacion": {"type": "number", "description": "Valor impreso en el billete (1, 2, 5, 10, 20, 50, 100...)."},
+                                    "cantidad": {"type": "integer", "description": "Cuántos billetes de ESA denominación se cuentan en la foto."},
+                                },
+                                "required": ["denominacion", "cantidad"],
+                            },
+                        },
+                        "billetes_bs": {
+                            "type": "array",
+                            "description": "SOLO para tipo = 'Efectivo': lista de los billetes en BOLÍVARES que se ven en la foto, agrupados por denominación -- mismo formato que 'billetes_usd'. Para cualquier otro tipo, deja un arreglo vacío ([]).",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "denominacion": {"type": "number", "description": "Valor impreso en el billete."},
+                                    "cantidad": {"type": "integer", "description": "Cuántos billetes de ESA denominación se cuentan en la foto."},
+                                },
+                                "required": ["denominacion", "cantidad"],
+                            },
                         },
                     },
                     "required": ["archivo", "monto", "tipo", "destino_telefono_o_cuenta"],
@@ -799,7 +862,25 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              Si tienes dudas sobre a cuál recibo pertenece un monto en una foto con múltiples recibos, y alguno
              de esos recibos en la misma imagen dice "LOTE", clasifica ese monto como categoría (2), no (4).
 
-        5) EFECTIVO: no aplica comprobante fotográfico normalmente; ignora salvo que se indique lo contrario.
+        5) EFECTIVO (conteo de billetes físicos) -- categoría especial, DISTINTA a todas las demás:
+           - Es una foto de billetes físicos (dólares y/o bolívares) puestos sobre una mesa, mostrador, o en
+             la mano, para contar cuánto efectivo hay -- NO es un comprobante de pago ni un cierre de
+             sistema, y NO se compara contra ningún total del sistema A2 (por eso "monto" y
+             "destino_telefono_o_cuenta" no aplican aquí -- déjalos en 0 y "" respectivamente).
+           - Identifica CADA billete visible en la foto por su denominación IMPRESA (el número grande, ej.
+             "20", "5", "1" para dólares; el valor impreso para bolívares) y su moneda (USD o Bs) -- algunos
+             billetes pueden estar boca abajo, al revés, o parcialmente tapados por otro billete de la pila;
+             identifícalos igual por el número impreso que sí se alcance a ver, sin importar la orientación.
+           - Agrupa por denominación: cuenta cuántos billetes hay de cada valor, para cada moneda por
+             separado, y repórtalo en "billetes_usd" y "billetes_bs" (arreglos de {"denominacion":
+             N, "cantidad": N}). Ej. si ves 3 billetes de $20, 2 de $5, y 10 de $1: billetes_usd =
+             [{"denominacion": 20, "cantidad": 3}, {"denominacion": 5, "cantidad": 2}, {"denominacion": 1,
+             "cantidad": 10}]. Si la foto solo tiene billetes de una moneda, deja el arreglo de la otra
+             moneda vacío ([]).
+           - Un mismo billete NUNCA se cuenta dos veces, incluso si aparece parcialmente detrás de otro en la
+             pila o abanico de billetes -- cuenta cada billete físico UNA sola vez. Si genuinamente no puedes
+             distinguir cuántos billetes hay en una pila muy gruesa (no se ven los bordes individuales), cuenta
+             los que sí puedas distinguir con confianza y no inventes una cantidad para el resto.
 
         REGLA DE ORO: si un documento tiene "LOTE" en el texto y una tabla de Compra/Anulada/Total, es
         categoría (2), nunca (4), sin importar qué tan parecido suene a "transferencia".
