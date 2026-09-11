@@ -905,6 +905,32 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
         débito), NO uno solo — sigue leyendo el bloque completo hasta encontrar AMBOS "TOTAL" antes de dar el
         reporte por transcrito, aunque el primer total que encuentres ya "se vea completo" por sí solo.
 
+        CASO ESPECIAL 5 — COMBINACIÓN de los dos casos anteriores en la MISMA foto: dos reportes de cierre
+        DISTINTOS (dos "L:" diferentes, como en el CASO ESPECIAL 3), Y ADEMÁS uno de esos dos reportes trae la
+        estructura de doble total del CASO ESPECIAL 4 (crédito Y débito juntos bajo el mismo "L:", aunque uno
+        de los dos números sea "0,00"). Esto va en DOS elementos (uno por cada "L:" distinto, igual que el
+        CASO ESPECIAL 3) — pero el elemento del reporte con doble total lleva AMBOS campos "total_fila_*"
+        llenos (igual que el CASO ESPECIAL 4), no solo uno.
+        Ejemplo real — dos reportes de Banco de Venezuela en la misma foto, con distinta hora ("H:") cada uno
+        (señal de que son reportes genuinamente distintos, no repetidos):
+          • Primer reporte, "H:144137", encabezado "CIERRE CREDITO T:1002 L:502" seguido de "MASTER/VISA
+            DEBITO T:1002 L:502" (mismo "L:502" en ambos -- es el CASO ESPECIAL 4 dentro de este reporte):
+            trae "TARJETA CREDITO ... TOTAL 0 Bs. 0,00" (el crédito de ESTE reporte da cero, sigue siendo un
+            campo real que transcribir, no lo omitas) y, más abajo en el mismo bloque, "MASTER/VISA DEBITO
+            ... TOTAL 2 Bs. 18.135,68". Va en UN elemento: total_fila_credito=0, total_fila_mc_visa_debit=
+            18135.68, terminal_identificador="BDV T:1002 L:502".
+          • Segundo reporte, "H:144146" (hora DISTINTA a la del primero -- confirma que es un reporte
+            genuinamente aparte, no el mismo repetido), encabezado "CIERRE DEBITO T:2002 L:144": trae
+            "TARJETA DEBITO ... TOTAL 6 Bs. 24.529,61". Va en un SEGUNDO elemento separado: total_fila_debito=
+            24529.61, terminal_identificador="BDV T:2002 L:144".
+          • AMBOS elementos llevan "reportes_en_esta_foto"=2 (es la misma foto, dos reportes contados).
+        El error real que ya pasó con esta foto: transcribir SOLO el primer reporte (y encima con el monto de
+        débito mal leído, perdiendo dígitos), dejando el segundo reporte completo (Bs. 24.529,61) fuera del
+        cuadre -- una foto así puede perder más de Bs. 40.000 de tarjeta si no se separan bien los dos
+        reportes. Antes de dar una foto de tarjeta por transcrita, busca explícitamente un segundo bloque
+        "REPORTE DE CIERRE"/"TRANSMISIÓN DE LOTE" más abajo en la misma imagen, aunque el primero ya parezca
+        completo por sí solo.
+
         Cada imagen viene precedida por una línea de texto "--- Archivo #N de TOTAL: nombre exacto = "..." ---"
         indicando su nombre real de archivo. USA ESE NOMBRE EXACTO (tal cual, con extensión) en el campo
         "archivo" de cada elemento de "comprobantes_leidos". NO inventes ni parafrasees el nombre.
