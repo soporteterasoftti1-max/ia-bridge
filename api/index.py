@@ -146,21 +146,21 @@ def _describir_fuente_tarjeta(monto_lote, monto_individual):
     if monto_lote > 0:
         return "cierres de lote del terminal"
     return "comprobantes individuales"
-# Prefijos de celular venezolanos -- si "destino_identificador" empieza por uno de estos, el
+# Prefijos de celular venezolanos -- si "destino_telefono_o_cuenta" empieza por uno de estos, el
 # destino del pago es un TELÉFONO, sin ambigüedad posible (los números de cuenta bancaria no
 # usan este formato). Esta es la corrección automática que el prompt promete: si la IA elige
 # mal el "tipo" pero transcribe bien el número de destino, este chequeo lo corrige solo, SIN
 # depender de que la IA haya "razonado" correctamente sobre el diseño de la pantalla.
 _PREFIJOS_CELULAR_VE = ("0412", "0414", "0416", "0422", "0424", "0426")
-def _clasificar_por_destino(destino_identificador):
-    """A partir del número que la IA transcribió en "destino_identificador", determina si el
+def _clasificar_por_destino(destino_telefono_o_cuenta):
+    """A partir del número que la IA transcribió en "destino_telefono_o_cuenta", determina si el
     comprobante DEBERÍA ser "Pago Móvil" o "Transferencia" -- independiente de lo que la IA haya
     elegido en "tipo". Devuelve "Pago Móvil", "Transferencia", o None si el campo viene vacío o
     con un formato que no se puede clasificar con confianza (mejor no corregir nada a forzar una
     corrección equivocada)."""
-    if not destino_identificador:
+    if not destino_telefono_o_cuenta:
         return None
-    solo_digitos = re.sub(r"\D", "", str(destino_identificador))
+    solo_digitos = re.sub(r"\D", "", str(destino_telefono_o_cuenta))
     if not solo_digitos:
         return None
     candidato = solo_digitos
@@ -179,21 +179,21 @@ def _clasificar_por_destino(destino_identificador):
     return None
 def _corregir_tipos_por_destino(items):
     """Recorre los comprobantes ya leídos y, para cada uno de tipo Pago Móvil o Transferencia,
-    verifica su "destino_identificador" contra _clasificar_por_destino -- si no coincide con el
+    verifica su "destino_telefono_o_cuenta" contra _clasificar_por_destino -- si no coincide con el
     "tipo" que eligió la IA, lo corrige ahí mismo (mutando el dict en el lugar) y deja un
     registro de la corrección para mostrarlo en el resultado (transparencia: nunca se corrige
-    algo en silencio). No toca nada si destino_identificador viene vacío o no es clasificable."""
+    algo en silencio). No toca nada si destino_telefono_o_cuenta viene vacío o no es clasificable."""
     correcciones = []
     for item in items:
         tipo_actual = item.get("tipo")
         if tipo_actual not in ("Pago Móvil", "Transferencia"):
             continue
-        tipo_correcto = _clasificar_por_destino(item.get("destino_identificador"))
+        tipo_correcto = _clasificar_por_destino(item.get("destino_telefono_o_cuenta"))
         if tipo_correcto and tipo_correcto != tipo_actual:
             correcciones.append({
                 "archivo": item.get("archivo"),
                 "monto": item.get("monto"),
-                "destino_identificador": item.get("destino_identificador"),
+                "destino_telefono_o_cuenta": item.get("destino_telefono_o_cuenta"),
                 "tipo_original_ia": tipo_actual,
                 "tipo_corregido": tipo_correcto,
             })
@@ -386,7 +386,7 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         "correcciones_destino": correcciones_destino,
     }
 # ---------------------------------------------------------------------------
-# Definición de la herramienta (tool use de Claude). Incluye "destino_identificador"
+# Definición de la herramienta (tool use de Claude). Incluye "destino_telefono_o_cuenta"
 # y "reportes_en_esta_foto" -- agregados para que coincidan con las instrucciones
 # nuevas del prompt (más abajo). Sin declararlos aquí, Claude no puede devolverlos
 # aunque el prompt se lo pida: el tool-calling de la API solo acepta propiedades
@@ -464,12 +464,12 @@ HERRAMIENTA_AUDITORIA = {
                             "type": "number",
                             "description": "SOLO cuando tipo = 'Pago Móvil' y el comprobante muestra un campo 'Total' por separado del 'Monto' (donde Monto + Comisión = Total). Copia ESE número de 'Total' tal cual, AUNQUE ya hayas puesto el 'Monto' neto en el campo principal 'monto' — esto es una transcripción de respaldo independiente, no una repetición: sirve para que el sistema verifique automáticamente que no confundiste Monto con Total. Usa 0 si el comprobante no muestra un 'Total' separado del 'Monto'.",
                         },
-                        "destino_identificador": {
+                        "destino_telefono_o_cuenta": {
                             "type": "string",
-                            "description": "Este campo va SIEMPRE presente en cada elemento (aunque sea con texto vacío \"\") porque el esquema lo exige, pero solo tiene contenido real cuando tipo = 'Pago Móvil' o 'Transferencia' -- para cualquier otro tipo (tarjeta, efectivo, Cashea, cierre de lote, etc.) déjalo como cadena vacía \"\". Cuando tipo SÍ es 'Pago Móvil' o 'Transferencia', llenarlo es OBLIGATORIO, SIN IMPORTAR el banco, el diseño de la pantalla, ni si se ve un nombre de persona en vez de un banco: copia TAL CUAL (solo los dígitos, y guiones si los tiene) el número que identifica al BENEFICIARIO/DESTINO del pago -- el campo que en el comprobante suele decir 'Beneficiario:', 'Destino:', 'Cuenta destino:', 'Número celular:' o similar (NUNCA 'Cuenta origen:'/'Número celular de origen:', ese es el pagador, no el destino). Esto es una transcripción de RESPALDO independiente de tu elección de 'tipo': el sistema usa este número para verificar automáticamente por su formato si es un teléfono (04XX-XXXXXXX, 11 dígitos) o una cuenta bancaria (código de banco de 4 dígitos que NO empieza en '04' + resto de la cuenta, hasta 20 dígitos, a veces parcialmente enmascarada con asteriscos) -- y corrige el tipo si no coincide con lo que elegiste. Por eso es más importante que nunca copiarlo bien, incluso si estás seguro de qué 'tipo' pusiste. Solo déjalo vacío en un elemento de tipo 'Pago Móvil'/'Transferencia' si el documento genuinamente no muestra ningún identificador de destino en ningún lado de la imagen.",
+                            "description": "Este campo va SIEMPRE presente en cada elemento (aunque sea con texto vacío \"\") porque el esquema lo exige, pero solo tiene contenido real cuando tipo = 'Pago Móvil' o 'Transferencia' -- para cualquier otro tipo (tarjeta, efectivo, Cashea, cierre de lote, etc.) déjalo como cadena vacía \"\". Cuando tipo SÍ es 'Pago Móvil' o 'Transferencia', llenarlo es OBLIGATORIO: copia TAL CUAL (solo los dígitos, y guiones si los tiene) el NÚMERO DE TELÉFONO o NÚMERO DE CUENTA BANCARIA del BENEFICIARIO/DESTINO del pago -- el campo que en el comprobante suele decir 'Beneficiario:', 'Destino:', 'Cuenta destino:', 'Número celular de destino:' o similar. ⚠️ NUNCA copies aquí una CÉDULA o RIF (campos como 'Identificación receptor:', 'C.I.:', 'RIF:') -- aunque el nombre de ese campo se parezca al nombre de este ('identificación' vs. 'destino_telefono_o_cuenta'), son cosas DISTINTAS: una cédula/RIF NUNCA va aquí, solo un TELÉFONO o una CUENTA. Tampoco copies el de 'Cuenta origen:'/'Número celular de origen:', ese es el pagador, no el destino. Esto es una transcripción de RESPALDO independiente de tu elección de 'tipo': el sistema usa este número para verificar automáticamente por su formato si es un teléfono (04XX-XXXXXXX, 11 dígitos) o una cuenta bancaria (código de banco de 4 dígitos que NO empieza en '04' + resto de la cuenta, hasta 20 dígitos, a veces parcialmente enmascarada con asteriscos) -- y corrige el tipo si no coincide con lo que elegiste. Por eso es más importante que nunca copiarlo bien, incluso si estás seguro de qué 'tipo' pusiste. Solo déjalo vacío en un elemento de tipo 'Pago Móvil'/'Transferencia' si el documento genuinamente no muestra ningún teléfono ni cuenta de destino en ningún lado de la imagen.",
                         },
                     },
-                    "required": ["archivo", "monto", "tipo", "destino_identificador"],
+                    "required": ["archivo", "monto", "tipo", "destino_telefono_o_cuenta"],
                 },
             },
         },
@@ -667,11 +667,11 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              comercial: "Tpago" de Banesco, "Pago Móvil BDV", "C-Móvil" de Mercantil, etc.). Las
              Transferencias bancarias NUNCA identifican su destino con un número de teléfono -- solo con un
              número de cuenta bancaria. Ante cualquier duda sobre el "tipo", esta única señal decide todo.
-           - "destino_identificador" (ver su descripción en el schema) es OBLIGATORIO en TODO comprobante de
+           - "destino_telefono_o_cuenta" (ver su descripción en el schema) es OBLIGATORIO en TODO comprobante de
              tipo Pago Móvil o Transferencia: copia ahí el número de teléfono o de cuenta del destino tal cual
              (sin acortar ni enmascarar), aunque ya estés seguro del "tipo" elegido. El servidor vuelve a
              verificar el tipo automáticamente a partir de este número y lo corrige si hace falta -- un
-             "destino_identificador" vacío o mal copiado es lo único que hace que un error de clasificación no
+             "destino_telefono_o_cuenta" vacío o mal copiado es lo único que hace que un error de clasificación no
              se pueda arreglar después. Es el punto donde más dinero se ha perdido del cuadre por error de
              clasificación.
            - Otras señales típicas de categoría (3): cédula o RIF del emisor y receptor, número de referencia,
@@ -705,7 +705,7 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              es una fila de una consulta de movimientos/créditos con "Beneficiario" y "N° Cuenta" (identifica un
              destino por cuenta bancaria, la señal estructural de categoría 4) y un "Estatus" tipo "Pago Exitoso".
              Usa el número de la columna "Monto" como "monto", y copia el número de "N° Cuenta" (los dígitos
-             visibles, con asteriscos si están enmascarados) en "destino_identificador". Confundir este formato
+             visibles, con asteriscos si están enmascarados) en "destino_telefono_o_cuenta". Confundir este formato
              con un cierre de lote de tarjeta y clasificarlo como "Otro" es un error real que ya ha pasado y
              hace desaparecer transferencias genuinas del cuadre — antes de usar "Otro", revisa si la pantalla
              tiene "Beneficiario" + "Monto" + "Estatus" (transferencia/consulta de créditos bancaria) en vez de
