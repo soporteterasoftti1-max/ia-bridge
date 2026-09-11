@@ -227,6 +227,30 @@ def _detectar_reportes_faltantes(items):
                 ),
             })
     return advertencias
+def _detectar_efectivo_sin_billetes(items):
+    """Detecta comprobantes de tipo 'Efectivo' donde la IA no dejó ningún billete en
+    'billetes_usd' ni en 'billetes_bs' -- un arreglo vacío en los dos es válido para el esquema
+    (¡"requerido" solo exige que el campo EXISTA, no que tenga contenido!), pero probablemente
+    significa que la foto sí tenía billetes y la IA los describió en su texto de análisis sin
+    reflejarlos en los campos estructurados (ver advertencia en el prompt). No se puede inventar
+    el conteo, así que solo se expone para que el usuario revise la foto a mano."""
+    advertencias = []
+    for item in items:
+        if item.get("tipo") != "Efectivo":
+            continue
+        sin_usd = not (item.get("billetes_usd") or [])
+        sin_bs = not (item.get("billetes_bs") or [])
+        if sin_usd and sin_bs:
+            advertencias.append({
+                "archivo": item.get("archivo"),
+                "mensaje": (
+                    f'En "{item.get("archivo")}" la IA clasificó el comprobante como Efectivo pero no '
+                    f"registró ningún billete en los campos estructurados (aunque puede haberlos "
+                    f"descrito en el texto de análisis) -- revisa esta foto a mano, el conteo de "
+                    f"efectivo de este comprobante no se está mostrando."
+                ),
+            })
+    return advertencias
 def _detectar_discrepancias_monto_tarjeta(items):
     """Para cada Cierre de Lote, compara "monto" (la cifra general que reportó la IA) contra la
     suma de sus propios campos detallados (total_fila_credito + total_fila_debito +
@@ -304,7 +328,11 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         totales_sistema = {}
     items = [i for i in (comprobantes_leidos or []) if isinstance(i, dict)]
     correcciones_destino = _corregir_tipos_por_destino(items)
-    advertencias_calidad = _detectar_reportes_faltantes(items) + _detectar_discrepancias_monto_tarjeta(items)
+    advertencias_calidad = (
+        _detectar_reportes_faltantes(items)
+        + _detectar_discrepancias_monto_tarjeta(items)
+        + _detectar_efectivo_sin_billetes(items)
+    )
     # El "monto" que muestra la tabla en pantalla ("Monto Extraído") se reemplaza aquí por la
     # suma real de los campos detallados de cada Cierre de Lote -- que es lo que efectivamente
     # se usa para el cuadre (ver el bucle de abajo). Se hace DESPUÉS de _detectar_discrepancias_
@@ -881,6 +909,15 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              pila o abanico de billetes -- cuenta cada billete físico UNA sola vez. Si genuinamente no puedes
              distinguir cuántos billetes hay en una pila muy gruesa (no se ven los bordes individuales), cuenta
              los que sí puedas distinguir con confianza y no inventes una cantidad para el resto.
+           - ⚠️ ERROR REAL YA OBSERVADO: se ha visto describir los billetes correctamente en el texto de
+             "análisis_detallado" (ej. "3 billetes de $20, 2 de $5, 16 de $1") pero dejar "billetes_usd" y
+             "billetes_bs" VACÍOS en el elemento de "comprobantes_leidos" -- son dos lugares DISTINTOS de tu
+             respuesta y ambos deben decir lo mismo. El campo "billetes_usd"/"billetes_bs" de este elemento es
+             el que el sistema realmente usa para calcular el total; el texto de análisis es solo narrativa
+             de referencia que nadie usa para calcular nada. Si tu análisis en texto menciona billetes
+             visibles para este archivo, esos MISMOS billetes tienen que estar en el arreglo
+             "billetes_usd"/"billetes_bs" de ESE elemento -- un arreglo vacío mientras el texto describe
+             billetes es una contradicción tuya, no una respuesta válida.
 
         REGLA DE ORO: si un documento tiene "LOTE" en el texto y una tabla de Compra/Anulada/Total, es
         categoría (2), nunca (4), sin importar qué tan parecido suene a "transferencia".
