@@ -56,6 +56,7 @@ import base64
 import json
 import logging
 import os
+import re
 import traceback
 from typing import List
 import anthropic
@@ -145,12 +146,66 @@ def _describir_fuente_tarjeta(monto_lote, monto_individual):
     if monto_lote > 0:
         return "cierres de lote del terminal"
     return "comprobantes individuales"
+# Prefijos de celular venezolanos -- si "destino_identificador" empieza por uno de estos, el
+# destino del pago es un TELÉFONO, sin ambigüedad posible (los números de cuenta bancaria no
+# usan este formato). Esta es la corrección automática que el prompt promete: si la IA elige
+# mal el "tipo" pero transcribe bien el número de destino, este chequeo lo corrige solo, SIN
+# depender de que la IA haya "razonado" correctamente sobre el diseño de la pantalla.
+_PREFIJOS_CELULAR_VE = ("0412", "0414", "0416", "0422", "0424", "0426")
+def _clasificar_por_destino(destino_identificador):
+    """A partir del número que la IA transcribió en "destino_identificador", determina si el
+    comprobante DEBERÍA ser "Pago Móvil" o "Transferencia" -- independiente de lo que la IA haya
+    elegido en "tipo". Devuelve "Pago Móvil", "Transferencia", o None si el campo viene vacío o
+    con un formato que no se puede clasificar con confianza (mejor no corregir nada a forzar una
+    corrección equivocada)."""
+    if not destino_identificador:
+        return None
+    solo_digitos = re.sub(r"\D", "", str(destino_identificador))
+    if not solo_digitos:
+        return None
+    candidato = solo_digitos
+    # Algunos comprobantes omiten el "0" inicial del celular (ej. "412-1766662" en vez de
+    # "0412-1766662") -- se completa antes de comparar el prefijo.
+    if len(candidato) == 10 and not candidato.startswith("0"):
+        candidato = "0" + candidato
+    if len(candidato) == 11 and candidato[:4] in _PREFIJOS_CELULAR_VE:
+        return "Pago Móvil"
+    # Un número de cuenta bancaria venezolano tiene 20 dígitos (código de banco de 4 + resto de
+    # la cuenta), pero en los comprobantes suele venir parcial/enmascarado con asteriscos (ya
+    # descartados arriba, en "solo_digitos") -- por eso solo se exige un mínimo razonable de
+    # dígitos, no los 20 completos, para no dejar de reconocer una cuenta truncada como tal.
+    if len(solo_digitos) >= 10:
+        return "Transferencia"
+    return None
+def _corregir_tipos_por_destino(items):
+    """Recorre los comprobantes ya leídos y, para cada uno de tipo Pago Móvil o Transferencia,
+    verifica su "destino_identificador" contra _clasificar_por_destino -- si no coincide con el
+    "tipo" que eligió la IA, lo corrige ahí mismo (mutando el dict en el lugar) y deja un
+    registro de la corrección para mostrarlo en el resultado (transparencia: nunca se corrige
+    algo en silencio). No toca nada si destino_identificador viene vacío o no es clasificable."""
+    correcciones = []
+    for item in items:
+        tipo_actual = item.get("tipo")
+        if tipo_actual not in ("Pago Móvil", "Transferencia"):
+            continue
+        tipo_correcto = _clasificar_por_destino(item.get("destino_identificador"))
+        if tipo_correcto and tipo_correcto != tipo_actual:
+            correcciones.append({
+                "archivo": item.get("archivo"),
+                "monto": item.get("monto"),
+                "destino_identificador": item.get("destino_identificador"),
+                "tipo_original_ia": tipo_actual,
+                "tipo_corregido": tipo_correcto,
+            })
+            item["tipo"] = tipo_correcto
+    return correcciones
 def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     try:
         totales_sistema = json.loads(totales_json_str) if totales_json_str else {}
     except (json.JSONDecodeError, TypeError):
         totales_sistema = {}
     items = [i for i in (comprobantes_leidos or []) if isinstance(i, dict)]
+    correcciones_destino = _corregir_tipos_por_destino(items)
     terminales_cubiertos_por_lote = set()
     suma_lote_debito = 0.0
     suma_lote_credito = 0.0
@@ -328,6 +383,7 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         "por_tipo": reconciliacion,
         "total_general_comprobantes_calculado": round(total_general_comprobantes, 2),
         "veredicto_calculado": veredicto_calculado,
+        "correcciones_destino": correcciones_destino,
     }
 # ---------------------------------------------------------------------------
 # Definición de la herramienta (tool use de Claude). Incluye "destino_identificador"
