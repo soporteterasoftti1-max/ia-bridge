@@ -213,6 +213,8 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     reconciliacion = {}
     total_general_comprobantes = 0.0
     for tipo, clave_sistema in TIPO_COMPROBANTE_A_CLAVE_SISTEMA.items():
+        if tipo in ("Tarjeta de Débito", "Tarjeta de Crédito"):
+            continue  # se combinan más abajo en una sola categoría "Tarjeta (Débito + Crédito)"
         suma_comprobantes = round(sumas_finales.get(tipo, 0.0), 2)
         fuente = fuentes.get(tipo, "comprobantes individuales")
         info_sistema = totales_sistema.get(clave_sistema, {}) if isinstance(totales_sistema, dict) else {}
@@ -231,6 +233,46 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
             "fuente": fuente,
             "moneda": "Bs",
         }
+    # --- Tarjeta de Débito + Tarjeta de Crédito, combinadas en UNA sola comparación ---
+    # En el sistema A2 de este comercio, las ventas a crédito casi siempre quedan registradas
+    # bajo la misma clave "Tarjeta de Débito" del sistema (la clave "Tarjeta de Crédito" suele
+    # quedar en Bs. 0,00 aunque sí hubo ventas a crédito reales, según los propios comprobantes
+    # de cierre de lote). Comparar cada una por separado contra el sistema mostraba un "FALTANTE"
+    # de débito y un "SOBRANTE" de crédito por EL MISMO MONTO exacto -- un descuadre falso, no un
+    # problema real (confirmado en varias auditorías reales de este comercio). Por eso se
+    # combinan ambas categorías en una sola comparación: la suma total de comprobantes de
+    # tarjeta (débito + crédito) contra la suma total que reporta el sistema en esas dos claves
+    # (normalmente solo "Tarjeta de Débito" trae algo, pero se suman las dos por si el sistema
+    # alguna vez sí separa el crédito). Esto NO oculta un descuadre real de tarjeta: si la suma
+    # total de comprobantes de tarjeta no coincide con la suma total del sistema, la categoría
+    # combinada igual se marca como descuadre -- solo deja de dividir un mismo total real en dos
+    # mitades que nunca van a cuadrar por separado en este sistema.
+    suma_comprobantes_tarjeta = round(
+        sumas_finales.get("Tarjeta de Débito", 0.0) + sumas_finales.get("Tarjeta de Crédito", 0.0), 2
+    )
+    info_sistema_debito = totales_sistema.get("Tarjeta de Débito", {}) if isinstance(totales_sistema, dict) else {}
+    info_sistema_credito = totales_sistema.get("Tarjeta de Crédito", {}) if isinstance(totales_sistema, dict) else {}
+    monto_sistema_tarjeta = round(
+        parsear_monto_ve(info_sistema_debito.get("monto_ventas_sistema"))
+        + parsear_monto_ve(info_sistema_credito.get("monto_ventas_sistema")),
+        2,
+    )
+    diferencia_tarjeta = round(suma_comprobantes_tarjeta - monto_sistema_tarjeta, 2)
+    total_general_comprobantes += suma_comprobantes_tarjeta
+    cuadra_tarjeta = abs(diferencia_tarjeta) <= TOLERANCIA_DIFERENCIA_INSIGNIFICANTE_BS
+    fuente_tarjeta = _describir_fuente_tarjeta(
+        suma_lote_debito + suma_lote_credito, suma_individual_debito + suma_individual_credito
+    )
+    reconciliacion["Tarjeta (Débito + Crédito)"] = {
+        "clave_sistema": "Tarjeta de Débito + Tarjeta de Crédito",
+        "suma_comprobantes": suma_comprobantes_tarjeta,
+        "monto_sistema": monto_sistema_tarjeta,
+        "diferencia": diferencia_tarjeta,
+        "cuadra": cuadra_tarjeta,
+        "diferencia_insignificante": cuadra_tarjeta and abs(diferencia_tarjeta) >= 0.01,
+        "fuente": fuente_tarjeta,
+        "moneda": "Bs",
+    }
     if suma_cashea_usd > 0 or (isinstance(totales_sistema, dict) and totales_sistema.get("CASHEA")):
         tasa_dia = parsear_monto_ve(totales_sistema.get("_tasa_dia")) if isinstance(totales_sistema, dict) else 0.0
         info_cashea = totales_sistema.get("CASHEA", {}) if isinstance(totales_sistema, dict) else {}
@@ -368,7 +410,7 @@ HERRAMIENTA_AUDITORIA = {
                         },
                         "destino_identificador": {
                             "type": "string",
-                            "description": "OBLIGATORIO cuando tipo = 'Pago Móvil' o 'Transferencia': copia TAL CUAL (solo los dígitos, y guiones si los tiene) el número que identifica al BENEFICIARIO/DESTINO del pago -- el campo que en el comprobante suele decir 'Beneficiario:', 'Destino:', 'Cuenta destino:' o similar (NUNCA 'Cuenta origen:', ese es el pagador, no el destino). Esto es una transcripción de RESPALDO independiente de tu elección de 'tipo': el sistema usa este número para verificar automáticamente por su formato si es un teléfono (04XX-XXXXXXX, 11 dígitos) o una cuenta bancaria (código de banco de 4 dígitos que NO empieza en '04' + resto de la cuenta, hasta 20 dígitos, a veces parcialmente enmascarada con asteriscos) -- y corrige el tipo si no coincide con lo que elegiste. Por eso es más importante que nunca copiarlo bien, incluso si estás seguro de qué 'tipo' pusiste. Deja vacío solo si el documento no muestra ningún identificador de destino.",
+                            "description": "OBLIGATORIO cuando tipo = 'Pago Móvil' o 'Transferencia', SIN IMPORTAR el banco, el diseño de la pantalla, ni si se ve un nombre de persona en vez de un banco: copia TAL CUAL (solo los dígitos, y guiones si los tiene) el número que identifica al BENEFICIARIO/DESTINO del pago -- el campo que en el comprobante suele decir 'Beneficiario:', 'Destino:', 'Cuenta destino:', 'Número celular:' o similar (NUNCA 'Cuenta origen:'/'Número celular de origen:', ese es el pagador, no el destino). Esto es una transcripción de RESPALDO independiente de tu elección de 'tipo': el sistema usa este número para verificar automáticamente por su formato si es un teléfono (04XX-XXXXXXX, 11 dígitos) o una cuenta bancaria (código de banco de 4 dígitos que NO empieza en '04' + resto de la cuenta, hasta 20 dígitos, a veces parcialmente enmascarada con asteriscos) -- y corrige el tipo si no coincide con lo que elegiste. Por eso es más importante que nunca copiarlo bien, incluso si estás seguro de qué 'tipo' pusiste. Deja vacío solo si el documento no muestra ningún identificador de destino.",
                         },
                     },
                     "required": ["archivo", "monto", "tipo"],
@@ -589,6 +631,28 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              de "NÚMERO CELULAR DE ORIGEN", que suele venir parcialmente tapado con asteriscos como
              "04**-***8120" — ese es el que paga, no el que recibe) en "destino_identificador", sin acortarlo ni
              enmascararlo tú mismo.
+             CASO REAL 2 — pantalla azul "Pagar a Otros Bancos" / "El dinero fue enviado" con el logo "Dinero
+             Rápido BBVA Provincial" y la leyenda "Procesado por: SUICHE7B" (o cualquier otra red de pago
+             interbancaria similar): este formato YA se clasificó mal como "Transferencia" en la práctica.
+             Muestra el NOMBRE DE UNA PERSONA arriba de todo (el titular de la cuenta que recibe) y campos
+             "Banco:", "Número celular:", "Identificación:", "Concepto:", "Fecha:", "Referencia:" — sin la
+             palabra "Pago Móvil" en ningún lado, y SIN ningún campo de "cuenta destino". No te dejes guiar
+             por el nombre de persona, por el logo del banco EMISOR (BBVA Provincial/SUICHE7B es la red del
+             banco de quien PAGA, no de quien recibe), ni por la ausencia de la palabra "Pago Móvil": lo único
+             que decide es el campo "Número celular" (bajo el "Banco:" receptor) — si ahí hay un teléfono
+             (04XX-XXXXXXX), es Pago Móvil (categoría 3), igual que el caso de Banesco de arriba. Copia ese
+             número de "Número celular" en "destino_identificador".
+             REGLA GENERAL (para cualquier formato de pantalla que no encaje exactamente en los casos reales
+             de arriba, incluyendo bancos/apps que todavía no se han visto): "destino_identificador" es
+             OBLIGATORIO siempre que el comprobante sea de tipo Pago Móvil o Transferencia, SIN IMPORTAR el
+             diseño de la pantalla, el color, el logo del banco, si se ve un nombre de persona en vez de un
+             banco, o si la palabra "Pago Móvil"/"Transferencia" aparece o no en el texto. Ante la duda de si
+             una pantalla nueva/distinta es Pago Móvil o Transferencia, busca el campo que identifica al
+             RECEPTOR del dinero (no al emisor/pagador) y fíjate solo en su formato: un teléfono (04XX-
+             XXXXXXX) siempre es Pago Móvil; un número de cuenta bancaria (no empieza en "04") siempre es
+             Transferencia. Ese campo, copiado tal cual en "destino_identificador", es lo que permite que el
+             servidor corrija automáticamente cualquier error de clasificación tuyo — dejarlo vacío es lo único
+             que hace que un error de clasificación no se pueda arreglar después.
            - Otras señales típicas de categoría (3): número de teléfono (0412/0414/0424/0416/0426...), cédula o
              RIF del emisor y receptor, número de referencia, screenshot de app bancaria (BDV, Mercantil,
              Banesco, etc.), no de un terminal físico.
