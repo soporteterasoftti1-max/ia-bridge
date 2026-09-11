@@ -600,87 +600,41 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              siempre el tipo dedicado "Cashea".
 
         3) PAGO MÓVIL:
-           - 🔴 PROTOCOLO OBLIGATORIO, MECÁNICO, ANTES DE PENSAR EN "TIPO" (aplícalo literal, como una lista de
-             chequeo, no como una sugerencia general): en CUANTO veas en la pantalla las palabras "BANCO
-             EMISOR" y "BANCO RECEPTOR" juntas (formato típico de Banesco, pero puede aparecer en otros bancos
-             con el mismo diseño de recibo) — DETENTE antes de elegir un "tipo". Este formato de pantalla YA
-             causó errores reales de clasificación, más de una vez, en el mismo comercio. Sigue estos 3 pasos
-             en orden, sin saltarte ninguno:
-               1. Busca en la pantalla un campo que contenga la palabra "CELULAR" (ej. "NÚMERO CELULAR DE
-                  DESTINO", "NÚMERO CELULAR DE ORIGEN"). Casi siempre hay DOS: uno de ORIGEN y uno de DESTINO.
-               2. Ignora por completo el de ORIGEN (ese es quien paga, normalmente parcialmente tapado con
-                  asteriscos, ej. "04**-***2001") — el que importa es el de DESTINO.
-               3. Si el campo "NÚMERO CELULAR DE DESTINO" existe y tiene un número de teléfono completo (04XX-
-                  XXXXXXX), el tipo es Pago Móvil (categoría 3) y ESE número va en "destino_identificador" —
-                  sin importar que "BANCO EMISOR" y "BANCO RECEPTOR" sean bancos distintos entre sí (eso NO es
-                  señal de Transferencia: un Pago Móvil interbancario, entre bancos distintos, es tan común
-                  como uno del mismo banco, y ambos muestran "BANCO EMISOR"/"BANCO RECEPTOR" distintos). Ver
-                  dos nombres de banco diferentes en la misma pantalla es una trampa visual, no una regla.
-           - ⚠️⚠️ SEÑAL MÁS FUERTE QUE CUALQUIER OTRA, para el resto de formatos de pantalla (revisa esto antes
-             de fijarte en logos, colores o nombres de banco): si en CUALQUIER parte de la pantalla aparece la
-             palabra "celular" junto a un número de teléfono (ej. "Número celular:", "Celular destino", etc.)
-             — es Pago Móvil, sin excepción. Antes de decidir "Transferencia", confirma explícitamente que
-             NINGÚN campo de la pantalla dice "celular" junto a un número de teléfono en ningún lado del
-             destino.
-           - ⚠️ NO exijas que el texto diga literalmente "Pago Móvil": cada banco le pone su propio nombre
-             comercial a su función de pago móvil (ej. "Tpago" de Banesco, "Pago Móvil BDV", "C-Móvil" de
-             Mercantil, etc.). El texto puede decir cosas como "¡Listo! Tu Tpago fue exitoso" y SIGUE siendo
-             categoría (3).
-           - LA REGLA ESTRUCTURAL QUE SÍ DECIDE (más confiable que el nombre comercial): fíjate en cómo se
-             identifica al BENEFICIARIO/DESTINO del pago:
-                 • Si el beneficiario/destino se identifica con un NÚMERO DE TELÉFONO (04XX-XXXXXXX) + cédula
-                   o RIF (ej: "Beneficiario: Tera Suministros Ca - 0412-1766662"), es PAGO MÓVIL (categoría 3),
-                   sin importar qué palabra use el título de la pantalla. El campo "Cuenta origen" que a veces
-                   aparece es la cuenta del CLIENTE que paga (el emisor), no del comercio — no lo confundas con
-                   una cuenta destino.
-                 • Si el destino se identifica con un NÚMERO DE CUENTA BANCARIA completo o parcial (ej: "Cuenta
-                   destino: 0102-****-**-1234"), es TRANSFERENCIA (categoría 4).
-             Esta es la señal más confiable porque el nombre del producto varía por banco, pero la forma de
-             identificar al destinatario (teléfono vs. número de cuenta) es constante.
-           - ⚠️ Por esto mismo, "destino_identificador" (ver su descripción en el schema) es OBLIGATORIO en
-             TODO comprobante de tipo Pago Móvil o Transferencia: copia ahí el número de teléfono o de cuenta
-             del beneficiario tal cual, aunque ya hayas elegido el "tipo" con seguridad. El servidor vuelve a
-             verificar el tipo automáticamente a partir de ese número — un "tipo" mal elegido pero con
-             "destino_identificador" bien copiado SÍ se corrige solo; un "destino_identificador" vacío o mal
-             copiado NO se puede corregir. Este es el punto donde más dinero se ha perdido del cuadre por
-             error de clasificación — no lo dejes vacío por estar seguro del "tipo".
-             CASO REAL — pantalla verde "Recibo" / "¡Operación Exitosa!" de Banesco con los campos "NÚMERO DE
-             REFERENCIA", "NÚMERO CELULAR DE ORIGEN", "NÚMERO CELULAR DE DESTINO", "IDENTIFICACIÓN RECEPTOR",
-             "BANCO EMISOR", "BANCO RECEPTOR", "MONTO DE LA OPERACIÓN", "CONCEPTO": este formato YA se clasificó
-             mal como "Transferencia" en la práctica, MÁS DE UNA VEZ, a pesar de que el campo dice literalmente
-             "NÚMERO CELULAR DE DESTINO" (un teléfono, 04XX-XXXXXXX) — es Pago Móvil, sin excepción, cada vez
-             que el destino se identifica por un CELULAR. El error real ya observado es dejarse guiar por los
-             campos "BANCO EMISOR: BANESCO" / "BANCO RECEPTOR: [otro banco]" y concluir "son dos bancos
-             distintos, debe ser Transferencia" — eso es INCORRECTO, esos dos campos solo dicen de qué banco es
-             cada parte, no cambian que el destino se identifique por CELULAR. Copia el número COMPLETO de la
-             fila "NÚMERO CELULAR DE DESTINO" (NO el de "NÚMERO CELULAR DE ORIGEN", que suele venir
-             parcialmente tapado con asteriscos como "04**-***8120" — ese es el que paga, no el que recibe) en
-             "destino_identificador", sin acortarlo ni enmascararlo tú mismo.
-             CASO REAL 2 — pantalla azul "Pagar a Otros Bancos" / "El dinero fue enviado" con el logo "Dinero
-             Rápido BBVA Provincial" y la leyenda "Procesado por: SUICHE7B" (o cualquier otra red de pago
-             interbancaria similar): este formato YA se clasificó mal como "Transferencia" en la práctica.
-             Muestra el NOMBRE DE UNA PERSONA arriba de todo (el titular de la cuenta que recibe) y campos
-             "Banco:", "Número celular:", "Identificación:", "Concepto:", "Fecha:", "Referencia:" — sin la
-             palabra "Pago Móvil" en ningún lado, y SIN ningún campo de "cuenta destino". No te dejes guiar
-             por el nombre de persona, por el logo del banco EMISOR (BBVA Provincial/SUICHE7B es la red del
-             banco de quien PAGA, no de quien recibe), ni por la ausencia de la palabra "Pago Móvil": lo único
-             que decide es el campo "Número celular" (bajo el "Banco:" receptor) — si ahí hay un teléfono
-             (04XX-XXXXXXX), es Pago Móvil (categoría 3), igual que el caso de Banesco de arriba. Copia ese
-             número de "Número celular" en "destino_identificador".
-             REGLA GENERAL (para cualquier formato de pantalla que no encaje exactamente en los casos reales
-             de arriba, incluyendo bancos/apps que todavía no se han visto): "destino_identificador" es
-             OBLIGATORIO siempre que el comprobante sea de tipo Pago Móvil o Transferencia, SIN IMPORTAR el
-             diseño de la pantalla, el color, el logo del banco, si se ve un nombre de persona en vez de un
-             banco, o si la palabra "Pago Móvil"/"Transferencia" aparece o no en el texto. Ante la duda de si
-             una pantalla nueva/distinta es Pago Móvil o Transferencia, busca el campo que identifica al
-             RECEPTOR del dinero (no al emisor/pagador) y fíjate solo en su formato: un teléfono (04XX-
-             XXXXXXX) siempre es Pago Móvil; un número de cuenta bancaria (no empieza en "04") siempre es
-             Transferencia. Ese campo, copiado tal cual en "destino_identificador", es lo que permite que el
-             servidor corrija automáticamente cualquier error de clasificación tuyo — dejarlo vacío es lo único
-             que hace que un error de clasificación no se pueda arreglar después.
-           - Otras señales típicas de categoría (3): número de teléfono (0412/0414/0424/0416/0426...), cédula o
-             RIF del emisor y receptor, número de referencia, screenshot de app bancaria (BDV, Mercantil,
-             Banesco, etc.), no de un terminal físico.
+           - REGLA QUE DECIDE (para cualquier pantalla, conocida o no): fíjate en cómo se identifica al
+             BENEFICIARIO/DESTINO del pago -- NUNCA en el nombre comercial del producto, el logo, el color de
+             la pantalla, un nombre de persona, ni en si aparecen uno o dos bancos distintos (un Pago Móvil
+             interbancario, entre bancos distintos, es tan común como uno del mismo banco -- ver dos bancos
+             distintos en pantalla NO es señal de Transferencia, es una trampa visual frecuente).
+                 • Si el destino se identifica con un NÚMERO DE TELÉFONO (04XX-XXXXXXX) -- sea cual sea el
+                   nombre del campo que lo contiene ("Número celular de destino", "Beneficiario", "Celular
+                   destino", etc.; la palabra clave a buscar es "celular" junto a un teléfono) -- es PAGO
+                   MÓVIL (categoría 3), incluso si el texto nunca dice "Pago Móvil" (cada banco usa su propio
+                   nombre comercial: "Tpago" de Banesco, "Pago Móvil BDV", "C-Móvil" de Mercantil, etc.).
+                 • Si el destino se identifica con un NÚMERO DE CUENTA BANCARIA (no empieza en "04"), es
+                   TRANSFERENCIA (categoría 4).
+             Casi siempre hay DOS números de celular en pantalla (origen y destino): el de ORIGEN es quien
+             paga (normalmente tapado con asteriscos, ej. "04**-***2001") y NUNCA decide la categoría; el que
+             importa, siempre, es el de DESTINO.
+           - "destino_identificador" (ver su descripción en el schema) es OBLIGATORIO en TODO comprobante de
+             tipo Pago Móvil o Transferencia: copia ahí el número de teléfono o de cuenta del destino tal cual
+             (sin acortar ni enmascarar), aunque ya estés seguro del "tipo" elegido. El servidor vuelve a
+             verificar el tipo automáticamente a partir de este número y lo corrige si hace falta -- un
+             "destino_identificador" vacío o mal copiado es lo único que hace que un error de clasificación no
+             se pueda arreglar después. Es el punto donde más dinero se ha perdido del cuadre por error de
+             clasificación.
+           - Dos formatos de pantalla que YA causaron errores reales de clasificación en este comercio (para
+             reconocerlos de inmediato si vuelven a aparecer):
+               • Banesco, pantalla "Recibo"/"¡Operación Exitosa!" con campos "BANCO EMISOR"/"BANCO RECEPTOR" y
+                 "NÚMERO CELULAR DE ORIGEN"/"NÚMERO CELULAR DE DESTINO": el error ya visto fue asumir
+                 "Transferencia" solo porque BANCO EMISOR y BANCO RECEPTOR son bancos distintos -- eso no
+                 decide nada, lo único que decide es que el destino se identifica por celular.
+               • BBVA Provincial/SUICHE7B, pantalla azul "Pagar a Otros Bancos"/"El dinero fue enviado", con
+                 el nombre de una PERSONA arriba de todo y campos "Banco:"/"Número celular:" (sin la palabra
+                 "Pago Móvil" en ningún lado): el error ya visto fue dejarse guiar por el nombre de persona o
+                 por la ausencia de la palabra "Pago Móvil" -- lo único que decide es el campo "Número
+                 celular" bajo el "Banco:" receptor.
+           - Otras señales típicas de categoría (3): cédula o RIF del emisor y receptor, número de referencia,
+             screenshot de app bancaria (BDV, Mercantil, Banesco, etc.), no de un terminal físico.
            - MONTO A USAR: si el comprobante muestra por separado "Monto", "Comisión" y "Total" (Monto + Comisión =
              Total), usa SIEMPRE el "Monto" (neto) en el campo principal "monto", NUNCA el "Total". La comisión
              la cobra el banco emisor al que paga, no es parte de lo que recibe el comercio — usar el Total
