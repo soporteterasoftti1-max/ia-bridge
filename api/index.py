@@ -398,7 +398,7 @@ HERRAMIENTA_AUDITORIA = {
                         },
                         "reportes_en_esta_foto": {
                             "type": "integer",
-                            "description": "OBLIGATORIO cuando tipo = 'Cierre de Lote / Reporte de Cierre': ANTES de transcribir los montos, cuenta cuántos reportes de cierre COMPLETOS e INDEPENDIENTES (cada uno con su propio 'L:'/número de lote y su propio bloque 'APROBADO'/'Compra-Anulada-Total') hay impresos en ESTA MISMA foto -- ver 'CASO ESPECIAL 3'. Si en la foto solo hay un reporte, pon 1. Si hay dos reportes distintos apilados uno debajo del otro (muy común: el comercio fotografía varios cierres de terminal juntos para ahorrar fotos), pon 2 -- y en ese caso DEBES generar 2 elementos separados en 'comprobantes_leidos' para este mismo 'archivo', y este mismo número 2 va en AMBOS elementos (es el conteo total de la foto, no un índice). El servidor usa este número para detectar automáticamente si accidentalmente reportaste menos elementos de los que tú mismo contaste en la foto, y así nunca perder un reporte que sí notaste pero olvidaste transcribir. Si no puedes determinar el conteo, usa 1.",
+                            "description": "OBLIGATORIO cuando tipo = 'Cierre de Lote / Reporte de Cierre': ANTES de transcribir los montos, cuenta cuántos reportes de cierre COMPLETOS e INDEPENDIENTES (cada uno con su propio 'L:'/número de lote y su propio bloque 'APROBADO'/'Compra-Anulada-Total') hay impresos en ESTA MISMA foto -- ver 'CASO ESPECIAL 3'. Si en la foto solo hay un reporte, pon 1. Si hay dos reportes distintos apilados uno debajo del otro (muy común: el comercio fotografía varios cierres de terminal juntos para ahorrar fotos), pon 2 -- y en ese caso DEBES generar 2 elementos separados en 'comprobantes_leidos' para este mismo 'archivo', y este mismo número 2 va en AMBOS elementos (es el conteo total de la foto, no un índice). Un reporte con el MISMO 'L:' que reporta crédito Y débito juntos sigue contando como 1 (ver 'CASO ESPECIAL 4' -- eso va en UN solo elemento con ambos campos 'total_fila_*' llenos, no en dos elementos). El servidor usa este número para detectar automáticamente si accidentalmente reportaste menos elementos de los que tú mismo contaste en la foto, y así nunca perder un reporte que sí notaste pero olvidaste transcribir. Si no puedes determinar el conteo, usa 1.",
                         },
                         "comision_pago_movil": {
                             "type": "number",
@@ -791,6 +791,37 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
             con el primer bloque "APROBADO"/TOTAL que veas: sigue leyendo hacia abajo, cuenta los reportes con
             "reportes_en_esta_foto" ANTES de transcribir montos, y verifica cada número dígito por dígito contra
             la sección correcta (no confundas "18.135,68" con un número de tres cifras) antes de darlo por bueno.
+
+        CASO ESPECIAL 4 — un ÚNICO reporte de cierre (UN SOLO "L:", UN SOLO encabezado, NO dos reportes
+        distintos como en el CASO ESPECIAL 3 de arriba) que trae DOS SECCIONES DE TOTAL distintas dentro de
+        ESE MISMO reporte: una sección "TARJETA CREDITO"/"CIERRE CREDITO" con su propio TOTAL, Y ADEMÁS una
+        sección "MASTER/VISA DEBITO" o "TARJETA DEBITO" con OTRO TOTAL, ambas bajo el MISMO número de lote
+        ("L:") y el mismo encabezado. Esto es DISTINTO del CASO ESPECIAL 3: ahí eran dos reportes con dos "L:"
+        diferentes que van en DOS elementos separados; aquí es UN SOLO reporte (un solo "L:") que simplemente
+        reporta dos tipos de venta (crédito y débito) juntos — va en UN SOLO elemento de "comprobantes_leidos",
+        pero con AMBOS campos "total_fila_credito" Y "total_fila_mc_visa_debit"/"total_fila_debito" llenos a
+        la vez (no dejes uno en 0 solo porque ya llenaste el otro).
+        ⚠️ Este es exactamente el error que ya pasó en la realidad: la IA transcribió el total de
+        "TARJETA CREDITO" y se detuvo ahí, dando por completo el reporte — sin seguir leyendo hacia abajo,
+        en la MISMA sección/bloque, hasta encontrar el segundo total de "MASTER/VISA DEBITO" que venía justo
+        debajo, dentro de ese mismo reporte. El resultado fue que ese segundo monto (un total real de venta a
+        débito) desapareció por completo del cuadre.
+        Ejemplo real — un reporte de Banco de Venezuela con encabezado "CIERRE CREDITO T:1002 L:503" seguido,
+        en la misma línea o justo debajo, de "MASTER/VISA DEBITO T:1002 L:503" (el MISMO "L:503" en ambos,
+        señal de que es UN SOLO reporte, no dos): el cuerpo trae primero una sección con "TOTAL 1 Bs.
+        11.192,61" (esta es la sección de crédito → total_fila_credito=11192.61), y ADEMÁS, más abajo en el
+        mismo bloque, una sección "MASTER/VISA DEBITO" con "COMPRA 1 Bs. 13.509,81" y "TOTAL 1 Bs. 13.509,81"
+        (esta es la sección de débito → total_fila_mc_visa_debit=13509.81). La transcripción CORRECTA es UN
+        elemento con tipo="Cierre de Lote / Reporte de Cierre", total_fila_credito=11192.61 Y
+        total_fila_mc_visa_debit=13509.81 AL MISMO TIEMPO (ambos distintos de 0), terminal_identificador="BDV
+        T:1002 L:503". Transcribir solo el total de crédito (11.192,61) y dejar total_fila_mc_visa_debit en 0,
+        como si el reporte ya hubiera terminado ahí, es el error real que ya pasó: Bs. 13.509,81 de venta a
+        débito desaparecieron del cuadre en esa sola foto.
+        REGLA PRÁCTICA para no repetir este error: cuando un reporte tenga un encabezado que menciona DOS tipos
+        de tarjeta a la vez (ej. "CIERRE CREDITO T:X L:Y" seguido de "MASTER/VISA DEBITO T:X L:Y" con el MISMO
+        "L:"), es una señal segura de que ese reporte trae DOS totales que transcribir (uno de crédito y uno de
+        débito), NO uno solo — sigue leyendo el bloque completo hasta encontrar AMBOS "TOTAL" antes de dar el
+        reporte por transcrito, aunque el primer total que encuentres ya "se vea completo" por sí solo.
 
         Cada imagen viene precedida por una línea de texto "--- Archivo #N de TOTAL: nombre exacto = "..." ---"
         indicando su nombre real de archivo. USA ESE NOMBRE EXACTO (tal cual, con extensión) en el campo
