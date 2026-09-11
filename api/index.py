@@ -600,16 +600,28 @@ async def _auditar_comprobantes_impl(archivos: List[UploadFile], totales_json: s
              siempre el tipo dedicado "Cashea".
 
         3) PAGO MÓVIL:
-           - ⚠️⚠️ SEÑAL MÁS FUERTE QUE CUALQUIER OTRA (revisa esto PRIMERO, antes de fijarte en logos, colores o
-             nombres de banco): si en CUALQUIER parte de la pantalla aparece la palabra "celular" junto a un
-             número de teléfono (ej. "NÚMERO CELULAR DE DESTINO", "NÚMERO CELULAR DE ORIGEN", "Número celular:",
-             "Celular destino", etc.) — es Pago Móvil, sin excepción. NO importa que la pantalla muestre DOS
-             bancos distintos (ej. "BANCO EMISOR: BANESCO" / "BANCO RECEPTOR: BANCO DE VENEZUELA"): un Pago
-             Móvil INTERBANCARIO (entre bancos distintos) es tan común como uno del mismo banco, y AMBOS
-             muestran dos nombres de banco distintos en pantalla — ver dos bancos distintos NO es señal de
-             Transferencia, es una trampa visual frecuente que ya causó errores reales de clasificación. Antes
-             de decidir "Transferencia", confirma explícitamente que NINGÚN campo de la pantalla dice "celular"
-             junto a un número de teléfono en ningún lado del destino.
+           - 🔴 PROTOCOLO OBLIGATORIO, MECÁNICO, ANTES DE PENSAR EN "TIPO" (aplícalo literal, como una lista de
+             chequeo, no como una sugerencia general): en CUANTO veas en la pantalla las palabras "BANCO
+             EMISOR" y "BANCO RECEPTOR" juntas (formato típico de Banesco, pero puede aparecer en otros bancos
+             con el mismo diseño de recibo) — DETENTE antes de elegir un "tipo". Este formato de pantalla YA
+             causó errores reales de clasificación, más de una vez, en el mismo comercio. Sigue estos 3 pasos
+             en orden, sin saltarte ninguno:
+               1. Busca en la pantalla un campo que contenga la palabra "CELULAR" (ej. "NÚMERO CELULAR DE
+                  DESTINO", "NÚMERO CELULAR DE ORIGEN"). Casi siempre hay DOS: uno de ORIGEN y uno de DESTINO.
+               2. Ignora por completo el de ORIGEN (ese es quien paga, normalmente parcialmente tapado con
+                  asteriscos, ej. "04**-***2001") — el que importa es el de DESTINO.
+               3. Si el campo "NÚMERO CELULAR DE DESTINO" existe y tiene un número de teléfono completo (04XX-
+                  XXXXXXX), el tipo es Pago Móvil (categoría 3) y ESE número va en "destino_identificador" —
+                  sin importar que "BANCO EMISOR" y "BANCO RECEPTOR" sean bancos distintos entre sí (eso NO es
+                  señal de Transferencia: un Pago Móvil interbancario, entre bancos distintos, es tan común
+                  como uno del mismo banco, y ambos muestran "BANCO EMISOR"/"BANCO RECEPTOR" distintos). Ver
+                  dos nombres de banco diferentes en la misma pantalla es una trampa visual, no una regla.
+           - ⚠️⚠️ SEÑAL MÁS FUERTE QUE CUALQUIER OTRA, para el resto de formatos de pantalla (revisa esto antes
+             de fijarte en logos, colores o nombres de banco): si en CUALQUIER parte de la pantalla aparece la
+             palabra "celular" junto a un número de teléfono (ej. "Número celular:", "Celular destino", etc.)
+             — es Pago Móvil, sin excepción. Antes de decidir "Transferencia", confirma explícitamente que
+             NINGÚN campo de la pantalla dice "celular" junto a un número de teléfono en ningún lado del
+             destino.
            - ⚠️ NO exijas que el texto diga literalmente "Pago Móvil": cada banco le pone su propio nombre
              comercial a su función de pago móvil (ej. "Tpago" de Banesco, "Pago Móvil BDV", "C-Móvil" de
              Mercantil, etc.). El texto puede decir cosas como "¡Listo! Tu Tpago fue exitoso" y SIGUE siendo
