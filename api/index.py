@@ -474,7 +474,10 @@ HERRAMIENTA_AUDITORIA = {
                     "type": "object",
                     "properties": {
                         "archivo": {"type": "string"},
-                        "monto": {"type": "number"},
+                        "monto": {
+                            "type": "number",
+                            "description": "El monto principal de este comprobante, en la moneda que corresponda (Bs. para casi todo, USD solo para Cashea). Para tipo 'Cierre de Lote / Reporte de Cierre': este número DEBE ser exactamente igual a la suma de los campos 'total_fila_credito' + 'total_fila_debito' + 'total_fila_mc_visa_debit' + 'total_fila_extrafin' que pongas en este mismo elemento -- son el mismo dinero contado de dos formas distintas, nunca deberían diferir. Antes de responder, súmalos tú mismo y verifica que 'monto' coincida con esa suma; si el ticket imprime una línea 'MONTO TOTAL' (formato 'TRANSMISIÓN DE LOTE'), usa ese valor impreso para 'monto' Y confirma que tu propia suma de los campos 'total_fila_*' da ese mismo número -- si no coinciden, revisa cuál de los dos leíste mal antes de responder, no entregues dos cifras contradictorias para el mismo comprobante.",
+                        },
                         "tipo": {
                             "type": "string",
                             "enum": [
