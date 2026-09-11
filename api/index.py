@@ -267,6 +267,24 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     items = [i for i in (comprobantes_leidos or []) if isinstance(i, dict)]
     correcciones_destino = _corregir_tipos_por_destino(items)
     advertencias_calidad = _detectar_reportes_faltantes(items) + _detectar_discrepancias_monto_tarjeta(items)
+    # El "monto" que muestra la tabla en pantalla ("Monto Extraído") se reemplaza aquí por la
+    # suma real de los campos detallados de cada Cierre de Lote -- que es lo que efectivamente
+    # se usa para el cuadre (ver el bucle de abajo). Se hace DESPUÉS de _detectar_discrepancias_
+    # monto_tarjeta (para no perder esa advertencia) pero ANTES de sumar nada: así lo que el
+    # usuario ve en pantalla siempre coincide con lo que realmente se calculó, en vez de
+    # depender de que la IA haya sido internamente consistente consigo misma al escribir
+    # "monto" por separado (ya se vio que puede no serlo, aunque cada campo individual esté
+    # bien -- ej. sumar mal sus propios números al calcular el total general).
+    for item in items:
+        if item.get("tipo") != "Cierre de Lote / Reporte de Cierre":
+            continue
+        item["monto"] = round(
+            _num(item.get("total_fila_credito"))
+            + _num(item.get("total_fila_debito"))
+            + _num(item.get("total_fila_mc_visa_debit"))
+            + _num(item.get("total_fila_extrafin")),
+            2,
+        )
     terminales_cubiertos_por_lote = set()
     suma_lote_debito = 0.0
     suma_lote_credito = 0.0
