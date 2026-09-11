@@ -615,7 +615,7 @@ HERRAMIENTA_AUDITORIA = {
                             },
                         },
                     },
-                    "required": ["archivo", "monto", "tipo", "destino_telefono_o_cuenta"],
+                    "required": ["archivo", "monto", "tipo", "destino_telefono_o_cuenta", "billetes_usd", "billetes_bs"],
                 },
             },
         },
