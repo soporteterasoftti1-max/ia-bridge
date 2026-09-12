@@ -1231,3 +1231,183 @@ async def reconciliar_comprobantes(request: Request):
 @app.post("/reconciliar", dependencies=[Depends(verificar_secreto)])
 async def reconciliar_comprobantes_alt(request: Request):
     return await reconciliar_comprobantes(request)
+
+# ---------------------------------------------------------------------------
+# /api/contar_efectivo -- endpoint INDEPENDIENTE del resto de la auditoría,
+# dedicado solo a contar billetes físicos (Bs y USD). Usa Sonnet en vez de
+# Haiku (más preciso para el conteo de billetes superpuestos, que Haiku
+# viene fallando de forma repetida) y un prompt propio mucho más corto y
+# enfocado -- sin las reglas de Pago Móvil/Transferencia/Tarjeta que no
+# aplican aquí, para que el modelo no reparta atención entre varias
+# categorías distintas. index.html llama a este endpoint desde un botón
+# separado de "Auditoría IA", con su propio selector de archivos.
+# ---------------------------------------------------------------------------
+HERRAMIENTA_CONTAR_EFECTIVO = {
+    "name": "reportar_billetes",
+    "description": "Reporta el conteo detallado de billetes físicos (Bs y/o USD) vistos en una o más fotos.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "billetes": {
+                "type": "array",
+                "description": "Un elemento por CADA foto analizada (en el mismo orden en que se recibieron).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "archivo": {"type": "string", "description": "Nombre EXACTO de archivo indicado antes de esta imagen, tal cual, con extensión."},
+                        "billetes_usd": {
+                            "type": "array",
+                            "description": "Billetes en DÓLARES vistos en ESTA foto, agrupados por denominación. Si no hay ninguno, arreglo vacío ([]).",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "denominacion": {"type": "number", "description": "Valor impreso en el billete (1, 5, 10, 20, 50, 100...)."},
+                                    "cantidad": {"type": "integer", "description": "Cuántos billetes de ESA denominación hay en esta foto."},
+                                },
+                                "required": ["denominacion", "cantidad"],
+                            },
+                        },
+                        "billetes_bs": {
+                            "type": "array",
+                            "description": "Billetes en BOLÍVARES vistos en ESTA foto, agrupados por denominación. Mismo formato que 'billetes_usd'. Si no hay ninguno, arreglo vacío ([]).",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "denominacion": {"type": "number", "description": "Valor impreso en el billete."},
+                                    "cantidad": {"type": "integer", "description": "Cuántos billetes de ESA denominación hay en esta foto."},
+                                },
+                                "required": ["denominacion", "cantidad"],
+                            },
+                        },
+                    },
+                    "required": ["archivo", "billetes_usd", "billetes_bs"],
+                },
+            },
+        },
+        "required": ["billetes"],
+    },
+}
+async def _contar_efectivo_impl(archivos: List[UploadFile]):
+    logger.info("Recibida solicitud /api/contar_efectivo con %d archivo(s)", len(archivos))
+    try:
+        content_blocks = []
+        archivos_procesados = []
+        for indice, archivo in enumerate(archivos, start=1):
+            contenido_bytes = await archivo.read()
+            mime_type = archivo.content_type or ""
+            if not mime_type.startswith("image/"):
+                continue
+            base64_encoded = base64.b64encode(contenido_bytes).decode("utf-8")
+            content_blocks.append({
+                "type": "text",
+                "text": f'--- Archivo #{indice} de {len(archivos)}: nombre exacto = "{archivo.filename}" ---'
+            })
+            content_blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": mime_type, "data": base64_encoded}
+            })
+            archivos_procesados.append(archivo.filename)
+        if not content_blocks:
+            return {"status": "error", "message": "No se encontraron imágenes válidas."}
+
+        prompt_contar_efectivo = f"""
+        Eres un asistente que cuenta billetes físicos de dólares (USD) y bolívares (Bs) a partir de fotos de
+        billetes puestos sobre una mesa, mostrador, o en la mano -- NO son comprobantes de pago ni cierres de
+        sistema, es puramente un conteo de efectivo físico.
+
+        Para CADA una de las {len(archivos)} foto(s) que se te muestran (cada una precedida por una línea de
+        texto "--- Archivo #N de {len(archivos)}: nombre exacto = "..." ---" con su nombre real de archivo):
+
+        1. Identifica CADA billete visible por su denominación IMPRESA (el número grande del billete: 1, 5,
+           10, 20, 50, 100 para dólares; el valor impreso para bolívares) y su moneda (USD o Bs). Billetes boca
+           abajo, al revés, o parcialmente tapados por otro billete se identifican igual por el número que sí
+           se alcance a ver, sin importar la orientación.
+        2. Agrupa por denominación: cuenta cuántos billetes hay de cada valor, para cada moneda por separado.
+        3. ⚠️ CUIDADO ESPECIAL con billetes de la MISMA denominación superpuestos en abanico o pila (donde cada
+           billete tapa parcialmente al siguiente, dejando ver solo un borde delgado de cada uno) -- este es el
+           escenario donde más se ha fallado, sobrecontando o mezclando denominaciones. Para este patrón:
+           cuenta los BORDES o ESQUINAS distintos y separables que alcances a ver con claridad (cada borde
+           visible = un billete), NO el ancho total aparente de la pila ni una impresión general de "se ve
+           como muchos". Si dos bordes están tan pegados que no puedes asegurar si son uno o dos billetes
+           distintos, cuenta el número más conservador de los dos posibles antes que sobreestimar. Verifica tu
+           conteo de cada denominación una segunda vez antes de responder, contando de nuevo desde cero.
+        4. Un mismo billete NUNCA se cuenta dos veces, incluso si aparece parcialmente detrás de otro en la
+           pila. Si genuinamente no puedes distinguir cuántos billetes hay en una zona muy densa de la foto
+           (no se ven los bordes individuales), cuenta los que sí puedas distinguir con confianza y no inventes
+           una cantidad para el resto.
+        5. Usa el nombre EXACTO de archivo indicado antes de cada imagen (tal cual, con extensión) en el campo
+           "archivo". NO inventes ni parafrasees el nombre.
+
+        Llama a la herramienta "reportar_billetes" con un elemento en "billetes" por cada foto (en el mismo
+        orden en que se recibieron), aunque una foto no tenga billetes de una de las dos monedas (en ese caso
+        deja ese arreglo vacío).
+        """
+
+        try:
+            respuesta = CLIENTE_IA.messages.create(
+                model="claude-sonnet-5",
+                max_tokens=4000,
+                temperature=0.0,
+                system=prompt_contar_efectivo,
+                tools=[HERRAMIENTA_CONTAR_EFECTIVO],
+                tool_choice={"type": "tool", "name": "reportar_billetes"},
+                messages=[{"role": "user", "content": content_blocks}],
+            )
+        except anthropic.APIConnectionError as e:
+            logger.error("Error de CONEXIÓN de red hacia Anthropic: %s", e)
+            return {"status": "error", "message": "No se pudo conectar con el servidor de IA. Detalle: " + str(e)}
+        except anthropic.AuthenticationError as e:
+            logger.error("Error de AUTENTICACIÓN (API key inválida o sin créditos): %s", e)
+            return {"status": "error", "message": "La API key de Anthropic no es válida o no tiene acceso. Detalle: " + str(e)}
+        except anthropic.RateLimitError as e:
+            logger.error("Rate limit alcanzado: %s", e)
+            return {"status": "error", "message": "Se alcanzó el límite de solicitudes a la IA. Intenta de nuevo en unos segundos."}
+        except anthropic.APIStatusError as e:
+            logger.error("La API de Anthropic respondió con error %s: %s", e.status_code, e.response.text)
+            return {"status": "error", "message": f"La IA respondió con error {e.status_code}: {e.message}"}
+
+        logger.info(
+            "Respuesta recibida de Anthropic (contar_efectivo, Sonnet). stop_reason=%s, tokens_entrada=%s, tokens_salida=%s",
+            respuesta.stop_reason, respuesta.usage.input_tokens, respuesta.usage.output_tokens
+        )
+        if respuesta.stop_reason == "max_tokens":
+            logger.error("La respuesta de contar_efectivo se CORTÓ por exceder max_tokens.")
+            return {"status": "error", "message": "La IA se quedó sin espacio de respuesta. Intenta con menos fotos a la vez."}
+
+        bloque_tool = next((b for b in respuesta.content if b.type == "tool_use"), None)
+        if bloque_tool is None:
+            logger.warning("Claude no devolvió tool_use en contar_efectivo. Contenido crudo: %s", respuesta.content)
+            return {"status": "error", "message": "Claude no devolvió una respuesta estructurada."}
+
+        billetes_por_archivo = bloque_tool.input.get("billetes") or []
+        archivos_mencionados = {b.get("archivo") for b in billetes_por_archivo if isinstance(b, dict)}
+        archivos_faltantes = [a for a in archivos_procesados if a not in archivos_mencionados]
+
+        # Reutiliza _agregar_efectivo_fisico (misma lógica que ya usa /api/auditar) dándole
+        # elementos con tipo="Efectivo" -- evita duplicar la lógica de suma/agrupación.
+        items_falsos = [dict(b, tipo="Efectivo") for b in billetes_por_archivo if isinstance(b, dict)]
+        resumen = _agregar_efectivo_fisico(items_falsos)
+
+        mensaje = "Conteo de efectivo completado con éxito"
+        if archivos_faltantes:
+            mensaje += f" | ATENCIÓN: {len(archivos_faltantes)} archivo(s) subido(s) NO aparecen en el conteo: " + ", ".join(archivos_faltantes)
+
+        return {
+            "status": "success",
+            "message": mensaje,
+            "data": {
+                "billetes_por_archivo": billetes_por_archivo,
+                "archivos_evaluados": archivos_procesados,
+                "archivos_no_analizados": archivos_faltantes,
+                "efectivo_fisico": resumen,
+            },
+        }
+    except Exception as e:
+        logger.error("Excepción no controlada en /api/contar_efectivo: %s\n%s", e, traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+@app.post("/api/contar_efectivo", dependencies=[Depends(verificar_secreto)])
+async def contar_efectivo(archivos: List[UploadFile] = File(...)):
+    return await _contar_efectivo_impl(archivos)
+@app.post("/contar_efectivo", dependencies=[Depends(verificar_secreto)])
+async def contar_efectivo_alt(archivos: List[UploadFile] = File(...)):
+    return await _contar_efectivo_impl(archivos)
