@@ -1347,7 +1347,6 @@ async def _contar_efectivo_impl(archivos: List[UploadFile]):
             respuesta = CLIENTE_IA.messages.create(
                 model="claude-sonnet-5",
                 max_tokens=4000,
-                temperature=0.0,
                 system=prompt_contar_efectivo,
                 tools=[HERRAMIENTA_CONTAR_EFECTIVO],
                 tool_choice={"type": "tool", "name": "reportar_billetes"},
