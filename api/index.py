@@ -447,9 +447,9 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     # total de comprobantes de tarjeta no coincide con la suma total del sistema, la categoría
     # combinada igual se marca como descuadre -- solo deja de dividir un mismo total real en dos
     # mitades que nunca van a cuadrar por separado en este sistema.
-    suma_comprobantes_tarjeta = round(
-        sumas_finales.get("Tarjeta de Débito", 0.0) + sumas_finales.get("Tarjeta de Crédito", 0.0), 2
-    )
+    suma_debito_individual = round(sumas_finales.get("Tarjeta de Débito", 0.0), 2)
+    suma_credito_individual = round(sumas_finales.get("Tarjeta de Crédito", 0.0), 2)
+    suma_comprobantes_tarjeta = round(suma_debito_individual + suma_credito_individual, 2)
     info_sistema_debito = totales_sistema.get("Tarjeta de Débito", {}) if isinstance(totales_sistema, dict) else {}
     info_sistema_credito = totales_sistema.get("Tarjeta de Crédito", {}) if isinstance(totales_sistema, dict) else {}
     monto_sistema_tarjeta = round(
@@ -463,7 +463,12 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
     fuente_tarjeta = _describir_fuente_tarjeta(
         suma_lote_debito + suma_lote_credito, suma_individual_debito + suma_individual_credito
     )
-    reconciliacion["Tarjeta (Débito + Crédito)"] = {
+    # La clave se llama "Tarjeta de Débito" (no "Tarjeta (Débito + Crédito)") para que coincida
+    # con el nombre real de la fila del sistema A2, ya que ahí es donde termina comparándose el
+    # total combinado -- el desglose individual (débito vs. crédito) va en "desglose_debito" y
+    # "desglose_credito", SOLO para mostrarlo en pantalla; el cálculo real (cuadra/diferencia)
+    # sigue usando la suma combinada de siempre, sin dividir la comparación en dos.
+    reconciliacion["Tarjeta de Débito"] = {
         "clave_sistema": "Tarjeta de Débito + Tarjeta de Crédito",
         "suma_comprobantes": suma_comprobantes_tarjeta,
         "monto_sistema": monto_sistema_tarjeta,
@@ -472,6 +477,8 @@ def calcular_reconciliacion(comprobantes_leidos, totales_json_str):
         "diferencia_insignificante": cuadra_tarjeta and abs(diferencia_tarjeta) >= 0.01,
         "fuente": fuente_tarjeta,
         "moneda": "Bs",
+        "desglose_debito": suma_debito_individual,
+        "desglose_credito": suma_credito_individual,
     }
     if suma_cashea_usd > 0 or (isinstance(totales_sistema, dict) and totales_sistema.get("CASHEA")):
         tasa_dia = parsear_monto_ve(totales_sistema.get("_tasa_dia")) if isinstance(totales_sistema, dict) else 0.0
